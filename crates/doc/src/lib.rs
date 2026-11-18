@@ -31,6 +31,7 @@
 
 pub mod edit;
 mod parse;
+pub mod table;
 pub mod write;
 
 use std::collections::BTreeMap;

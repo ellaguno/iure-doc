@@ -240,3 +240,55 @@ fn cut_copies_the_selection_and_escape_cancels_it() {
     assert_eq!(h.state().text, "");
     assert!(copied, "lo cortado va al portapapeles");
 }
+
+// --- Tablas en su lugar ---
+
+const TABLE_DOC: &str = "Antes\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nDespués\n";
+
+#[test]
+fn tables_show_as_cells_and_stay_untouched_until_edited() {
+    let mut h = blocks_harness(TABLE_DOC);
+    h.run_steps(3);
+    assert!(h.query_by_label("Fila 2, columna 2").is_some(), "la tabla es una cuadrícula");
+    assert_eq!(h.state().text, TABLE_DOC, "sin tocarla no se reescribe");
+    h.get_by_label("Fila 2, columna 2").focus();
+    h.run_steps(2);
+    h.get_by_label("Fila 2, columna 2").type_text("0");
+    h.run_steps(2);
+    assert_eq!(h.state().text, "Antes\n\n| a   | b   |\n| --- | --- |\n| 1   | 20  |\n\nDespués\n");
+}
+
+#[test]
+fn tab_in_the_last_cell_adds_a_row_and_down_leaves_the_table() {
+    let mut h = blocks_harness(TABLE_DOC);
+    h.run_steps(3);
+    h.get_by_label("Fila 2, columna 2").focus();
+    h.run_steps(2);
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    assert!(h.state().text.contains("| 1   | 2   |\n|     |     |"), "{:?}", h.state().text);
+    // La celda nueva tiene el foco: se escribe en ella.
+    h.event(egui::Event::Text("3".into()));
+    h.run_steps(2);
+    assert!(h.state().text.contains("| 3   |     |"), "{:?}", h.state().text);
+    // Abajo desde la última fila: al bloque siguiente.
+    h.key_press(Key::ArrowDown);
+    h.run_steps(3);
+    h.event(egui::Event::Text("¡".into()));
+    h.run_steps(2);
+    assert!(h.state().text.ends_with("¡Después\n"), "{:?}", h.state().text);
+}
+
+#[test]
+fn the_toolbar_adds_columns_and_shows_the_markdown() {
+    let mut h = blocks_harness(TABLE_DOC);
+    h.run_steps(3);
+    h.get_by_label("Fila 1, columna 1").focus();
+    h.run_steps(2);
+    h.get_by_label("+ Columna").click();
+    h.run_steps(3);
+    assert!(h.state().text.contains("| a   |     | b   |"), "{:?}", h.state().text);
+    h.get_by_label("Markdown").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Fila 1, columna 1").is_none(), "se edita como texto");
+}

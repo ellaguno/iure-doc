@@ -22,6 +22,9 @@
 //! bloque, Mayús+clic en otro bloque o arrastrar de un bloque a otro. Mientras existe, el editor
 //! toma copiar, cortar, pegar, borrar, teclear encima, Intro y Mayús+flechas (por líneas del
 //! texto); Esc, una flecha o un clic la quitan. La pinta el editor sobre cada bloque visible.
+//!
+//! **Tablas en su lugar** ([`crate::table_ui`]): un bloque que es una tabla se ve como cuadrícula
+//! de celdas; solo se reescribe (con las columnas alineadas) si se cambia.
 
 use std::hash::{Hash, Hasher};
 
@@ -32,6 +35,9 @@ use iure_doc::edit;
 
 use std::sync::Arc;
 
+use iure_doc::table::Grid;
+
+use crate::table_ui::{self, TableAct};
 use crate::{EditorStyle, Output, cached_galley, field, span, style_key};
 
 /// Un bloque del editor.
@@ -49,6 +55,8 @@ pub(crate) struct Chunk {
     /// Alto (medido, o estimado mientras no se ha dibujado) y el ancho con que se calculó.
     height: f32,
     width: f32,
+    /// Una tabla que se edita como Markdown (vuelve a cuadrícula al dejarla).
+    raw: bool,
 }
 
 /// Texto y espacio final de un trozo: el texto acaba al final de la línea de su último carácter
@@ -88,7 +96,7 @@ impl Blocks {
 
     fn chunk(&mut self, content: String, sep: String, born: bool) -> Chunk {
         self.next_uid = self.next_uid.wrapping_add(1);
-        Chunk { uid: self.next_uid, content, sep, born, height: 0.0, width: 0.0 }
+        Chunk { uid: self.next_uid, content, sep, born, height: 0.0, width: 0.0, raw: false }
     }
 
     fn pieces(&mut self, text: &str, born: bool) -> Vec<Chunk> {
@@ -279,6 +287,10 @@ struct State {
     /// Cursor del bloque con el foco (bloque, posición) cuando no había botón pulsado: de ahí
     /// parte Mayús+clic en otro bloque.
     caret: Option<Focus>,
+    /// Celda activa de una tabla (bloque, fila, columna): su barra se ve.
+    cell: Option<(u64, usize, usize)>,
+    /// Celda que toma el foco cuando se dibuje.
+    cell_focus: Option<(u64, usize, usize)>,
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -314,6 +326,8 @@ enum Act {
         to: (usize, usize),
         caret: bool,
     },
+    /// Una tabla cambió desde su cuadrícula (el foco sigue en la celda).
+    Table(usize),
 }
 
 /// La tecla entre bloques que toca en el bloque `i` (antes de que la vea su campo).
@@ -375,6 +389,17 @@ fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
         }
         None
     })
+}
+
+/// La tabla de un bloque, si lo es (y `pulldown-cmark` también la lee como tabla).
+fn table_of(content: &str) -> Option<Grid> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    if !content.contains('|') {
+        return None;
+    }
+    let g = Grid::parse(content)?;
+    let first = Parser::new_ext(content, Options::ENABLE_TABLES).next();
+    matches!(first, Some(Event::Start(Tag::Table(_)))).then_some(g)
 }
 
 /// Lo que pide la entrada con una selección entre bloques.
@@ -591,8 +616,13 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
                 let wanted = pending.and_then(|(u, at)| (u == c.uid).then_some(at));
                 let focused = ui.memory(|m| m.has_focus(fid));
                 active |= focused || wanted.is_some();
+                let in_table = st.cell.is_some_and(|x| x.0 == c.uid) || st.cell_focus.is_some_and(|x| x.0 == c.uid);
+                // Una tabla editada como Markdown vuelve a cuadrícula al dejarla.
+                if c.raw && !focused && wanted.is_none() {
+                    c.raw = false;
+                }
                 let seen = y + c.height + g >= viewport.min.y - margin && y <= viewport.max.y + margin;
-                if !(seen || focused || wanted.is_some()) {
+                if !(seen || focused || wanted.is_some() || in_table) {
                     space += c.height + g;
                     y += c.height + g;
                     continue;
@@ -600,6 +630,84 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
                 if space > 0.0 {
                     ui.add_space(space);
                     space = 0.0;
+                }
+                // Una tabla: cuadrícula de celdas.
+                if let Some(grid) = st.blocks.chunks.get(i).filter(|c| !c.raw).and_then(|c| table_of(&c.content)) {
+                    let uid = st.blocks.chunks.get(i).map_or(0, |c| c.uid);
+                    let mut focus_to = st.cell_focus.and_then(|(u, r, cc)| (u == uid).then_some((r, cc)));
+                    if let Some(at) = wanted {
+                        focus_to = Some(if at == 0 { (0, 0) } else { (grid.rows.len().saturating_sub(1), 0) });
+                        st.focus = None;
+                    }
+                    if focus_to.is_some() {
+                        st.cell_focus = None;
+                    }
+                    let bar = st.cell.and_then(|(u, r, cc)| (u == uid).then_some((r, cc))).or(focus_to);
+                    let out = table_ui::show(ui, fid, &grid, &style, focus_to, bar);
+                    if let Some((r, cc)) = out.focused.or(focus_to) {
+                        st.cell = Some((uid, r, cc));
+                        active = true;
+                    }
+                    if let Some((r, cc)) = out.focus_next {
+                        st.cell_focus = Some((uid, r, cc));
+                        st.cell = Some((uid, r, cc));
+                        active = true;
+                    }
+                    match out.act {
+                        Some(TableAct::Changed(md)) => {
+                            if let Some(c) = st.blocks.chunks.get_mut(i) {
+                                c.content = md;
+                            }
+                            if act.is_none() {
+                                act = Some(Act::Table(i));
+                            }
+                        }
+                        Some(TableAct::Leave(down)) => {
+                            st.cell = None;
+                            let to = if down {
+                                st.blocks.chunks.get(i + 1).map(|n| (n.uid, 0))
+                            } else {
+                                i.checked_sub(1)
+                                    .and_then(|j| st.blocks.chunks.get(j))
+                                    .map(|p| (p.uid, p.content.chars().count()))
+                            };
+                            if let Some(f) = to
+                                && act.is_none()
+                            {
+                                act = Some(Act::Focus(f));
+                            }
+                        }
+                        Some(TableAct::Raw) => {
+                            if let Some(c) = st.blocks.chunks.get_mut(i) {
+                                c.raw = true;
+                            }
+                            st.cell = None;
+                            st.focus = Some((uid, 0));
+                        }
+                        None => {}
+                    }
+                    let th = out.rect.height();
+                    if let Some(c) = st.blocks.chunks.get_mut(i) {
+                        c.height = th;
+                    }
+                    // Dentro de una selección entre bloques: la tabla entera se ve seleccionada.
+                    if let (Some((a, b)), Some(starts)) = (st.span, starts.as_ref()) {
+                        let s0 = starts.get(i).copied().unwrap_or(0);
+                        if a.max(b) > s0 && a.min(b) <= s0 {
+                            ui.painter().rect_filled(out.rect, 0.0, ui.visuals().selection.bg_fill.gamma_multiply(0.4));
+                        }
+                    }
+                    if g > 0.0 {
+                        ui.add_space(g);
+                    }
+                    y += th + g;
+                    if resp.is_none() {
+                        resp = Some(ui.interact(out.rect, fid.with("table"), egui::Sense::hover()));
+                    }
+                    continue;
+                }
+                if focused {
+                    st.cell = None;
                 }
                 if let Some(at) = wanted {
                     let mut s = TextEditState::load(ui.ctx(), fid).unwrap_or_default();
@@ -694,6 +802,9 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
         },
     );
     st.active = active;
+    if !active {
+        st.cell = None;
+    }
     if let Some(a) = act {
         let (focus, edits) = match a {
             Act::Edited(i, at) => (st.blocks.edited(i, at), true),
@@ -701,6 +812,11 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
             Act::MergePrev(i) => (st.blocks.merge_prev(i), true),
             Act::MergeNext(i) => (st.blocks.merge_next(i), true),
             Act::Focus(f) => (Some(f), false),
+            Act::Table(i) => {
+                // Se vuelve a partir por si acaso, pero el foco sigue en la celda.
+                let _ = st.blocks.edited(i, 0);
+                (None, true)
+            }
             Act::Span { from, to, caret } => {
                 let starts = st.blocks.starts();
                 let at = |(i, l): (usize, usize)| starts.get(i).copied().unwrap_or(0).saturating_add(l);

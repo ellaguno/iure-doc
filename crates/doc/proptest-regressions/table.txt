@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 389b1e78e99f3ff98850018dc8e6a357572edad32a4ac2a7059fa3cdcd42f9e5 # shrinks to g = Grid { align: [None], rows: [[" a"]] }

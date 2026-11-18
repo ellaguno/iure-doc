@@ -216,12 +216,25 @@ pub(crate) fn show(
                         .fill(if r == 0 { style.code_bg } else { egui::Color32::TRANSPARENT })
                         .stroke(border);
                     frame.show(ui, |ui| {
+                        // El Markdown de la celda con estilo (las marcas se ocultan fuera de la
+                        // celda activa); el encabezado, en negrita.
+                        let mut cell_style = style.clone();
+                        if r == 0 {
+                            cell_style.body_family = style.bold_family.clone();
+                        }
+                        let reveal = ui.memory(|m| m.has_focus(id)).then_some(0..text.len());
+                        let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+                            ui.fonts_mut(|f| {
+                                f.layout_job(crate::layout_job(buf.as_str(), &cell_style, wrap, reveal.clone()))
+                            })
+                        };
                         let out = egui::TextEdit::singleline(text)
                             .id(id)
                             .frame(egui::Frame::NONE)
                             .font(if r == 0 { head.clone() } else { body.clone() })
                             .align(align)
                             .desired_width(*w)
+                            .layouter(&mut layouter)
                             .show(ui);
                         let name =
                             format!("{} {}, {} {}", pick("Row", "Fila"), r + 1, pick("column", "columna"), c + 1);

@@ -14,8 +14,11 @@
 //! las flechas pasan de un bloque a otro. Un bloque que al editarse queda en varios (pegar, dos
 //! Intro seguidos) se parte solo.
 //!
-//! Pendiente (siguientes entregas): selección que cruce bloques y deshacer de todo el documento
-//! (hoy cada bloque deshace lo suyo).
+//! **Deshacer y rehacer** (Ctrl+Z, Ctrl+Mayús+Z o Ctrl+Y) son del documento entero
+//! ([`crate::history`]): deshacen también partir, unir y crear bloques, y lo tecleado seguido es un
+//! solo paso.
+//!
+//! Pendiente (siguiente entrega): selección que cruce bloques.
 
 use std::hash::{Hash, Hasher};
 
@@ -234,6 +237,10 @@ struct State {
     hash: u64,
     /// Cursor pendiente de poner (tras partir o unir bloques).
     focus: Option<Focus>,
+    /// Deshacer y rehacer de todo el documento.
+    history: crate::history::History,
+    /// ¿Algún bloque tenía el foco el cuadro anterior? (Entonces Ctrl+Z es del editor.)
+    active: bool,
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -314,6 +321,33 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
     let skey = style_key(&style);
     let h = hash_str(text);
     let mut st = ui.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
+    let now = ui.input(|i| i.time);
+    let mut changed = false;
+    // Deshacer y rehacer son del documento entero (no de cada bloque): se toman antes que los
+    // campos.
+    if st.active && st.hash == h {
+        let (undo, redo) = ui.input_mut(|i| {
+            let shift_cmd = egui::Modifiers { shift: true, ..egui::Modifiers::COMMAND };
+            let redo = i.consume_key(shift_cmd, Key::Z) || i.consume_key(egui::Modifiers::COMMAND, Key::Y);
+            let undo = !redo && i.consume_key(egui::Modifiers::COMMAND, Key::Z);
+            (undo, redo)
+        });
+        if undo || redo {
+            let mut t = text.clone();
+            let cursor = if undo { st.history.undo(&mut t) } else { st.history.redo(&mut t) };
+            if let Some(byte) = cursor {
+                let at = t.get(..byte).map_or(0, |p| p.chars().count());
+                *text = t;
+                st.blocks = Blocks::new(text);
+                st.focus = Some(st.blocks.at_offset(at));
+                changed = true;
+            }
+        }
+    }
+    let h = hash_str(text);
+    if changed {
+        st.hash = h;
+    }
     if st.hash != h || st.blocks.chunks.is_empty() {
         // El anfitrión cambió el texto: se vuelve a partir y el cursor sigue en el mismo punto.
         let keep = st.blocks.chunks.iter().find_map(|c| {
@@ -328,10 +362,12 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
         st.blocks = Blocks::new(text);
         st.hash = h;
         st.focus = keep.map(|g| st.blocks.at_offset(g));
+        st.history.clear();
     }
     let row_h = (style.size * 1.35).max(1.0);
     let gap = (style.size * 0.6).round();
     let mut act: Option<Act> = None;
+    let mut active = false;
     let mut resp: Option<egui::Response> = None;
     egui::ScrollArea::vertical().id_salt(id.with("scroll")).auto_shrink([false, false]).show_viewport(
         ui,
@@ -354,6 +390,7 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
                 let g = if c.born || c.sep.matches('\n').count() >= 2 { gap } else { 0.0 };
                 let wanted = pending.and_then(|(u, at)| (u == c.uid).then_some(at));
                 let focused = ui.memory(|m| m.has_focus(fid));
+                active |= focused || wanted.is_some();
                 let seen = y + c.height + g >= viewport.min.y - margin && y <= viewport.max.y + margin;
                 if !(seen || focused || wanted.is_some()) {
                     space += c.height + g;
@@ -404,7 +441,7 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
             }
         },
     );
-    let mut changed = false;
+    st.active = active;
     if let Some(a) = act {
         let (focus, edits) = match a {
             Act::Edited(i, at) => (st.blocks.edited(i, at), true),
@@ -417,8 +454,11 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
         st.focus = focus.filter(|(u, _)| st.blocks.index_of(*u).is_some());
         if edits {
             let new = st.blocks.text();
-            changed = new != *text;
-            *text = new;
+            if new != *text {
+                changed = true;
+                let before = std::mem::replace(text, new);
+                st.history.record(&before, text, now);
+            }
             st.hash = hash_str(text);
         }
         ui.ctx().request_repaint();

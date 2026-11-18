@@ -144,3 +144,39 @@ fn enter_inside_a_list_block_continues_the_list() {
     h.run_steps(2);
     assert_eq!(h.state().text, "- uno\n- \n\nfin\n");
 }
+
+#[test]
+fn undo_and_redo_cover_the_whole_document() {
+    let mut h = blocks_harness("uno\n\ntres\n");
+    block_cursor_at(&mut h, 3);
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    h.get_by_label("bloques").type_text("dos");
+    h.run_steps(2);
+    assert_eq!(h.state().text, "uno\n\ndos\n\ntres\n");
+    // Ctrl+Z deshace «dos» aunque vive en un bloque que se creó después.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().text, "uno\n\ntres\n");
+    h.key_press_modifiers(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().text, "uno\n\ndos\n\ntres\n");
+}
+
+#[test]
+fn undo_reverts_joining_blocks() {
+    let mut h = blocks_harness("uno\n\ndos\n");
+    block_cursor_at(&mut h, 3);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    h.key_press(Key::Backspace);
+    h.run_steps(2);
+    assert_eq!(h.state().text, "unodos\n");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().text, "uno\n\ndos\n");
+    // Y se sigue escribiendo donde quedó el cursor.
+    h.get_by_label("bloques").type_text("!");
+    h.run_steps(2);
+    assert!(h.state().text.contains('!'), "{:?}", h.state().text);
+}

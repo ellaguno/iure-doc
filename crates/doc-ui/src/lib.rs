@@ -41,6 +41,7 @@ use iure_doc::edit::{self, Edit};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
 
 mod blocks;
+mod history;
 pub use blocks::show as show_blocks;
 
 /// Colores y letra del editor.

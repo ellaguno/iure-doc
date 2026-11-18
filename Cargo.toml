@@ -1,0 +1,33 @@
+# El documento de la suite Iurefficient: modelo de bloques sobre Markdown sin pérdidas (`iure-doc`)
+# y su editor para egui (`iure-doc-ui`, DocEditor). Lo usan IureDesk, IureProject e IureEditor 2.0.
+[workspace]
+resolver = "3"
+members = ["crates/doc", "crates/doc-ui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "Apache-2.0"
+authors = ["Eduardo Llaguno"]
+repository = "https://github.com/ellaguno/iure-doc"
+
+[workspace.dependencies]
+iure-doc = { path = "crates/doc" }
+pulldown-cmark = { version = "0.13", default-features = false }
+serde_json = "1"
+# ui: egui 0.37 en toda la suite; el kit compartido fija la misma versión.
+egui = "0.37"
+iurefficient-ui = { git = "https://github.com/ellaguno/iurefficient-ui", branch = "main" }
+# pruebas
+proptest = "1"
+egui_kittest = "0.37"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"

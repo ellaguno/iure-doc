@@ -45,6 +45,10 @@ iure-doc-ui = { path = "../iure-doc/crates/doc-ui" }
 cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
 
+Cargo guarda una copia nueva de cada binario de prueba cada vez que cambian sus dependencias y
+nunca borra las anteriores: `cargo xtask sweep` (`--dry-run` para ver qué haría) deja solo la más
+reciente y quita la compilación incremental sin usar en una semana, sin tener que recompilar.
+
 Historia anterior: `crates/doc` y `crates/doc-ui` de IureDesk (b22e5d0 … 893c833).
 
 Licencia Apache-2.0, titular Eduardo Llaguno Velasco.

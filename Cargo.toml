@@ -2,7 +2,7 @@
 # y su editor para egui (`iure-doc-ui`, DocEditor). Lo usan IureDesk, IureProject e IureEditor 2.0.
 [workspace]
 resolver = "3"
-members = ["crates/doc", "crates/doc-ui"]
+members = ["crates/doc", "crates/doc-ui", "xtask"]
 
 [workspace.package]
 version = "0.10.0"

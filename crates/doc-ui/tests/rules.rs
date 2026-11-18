@@ -172,3 +172,68 @@ fn ctrl_shift_v_pastes_plain_text() {
     h.run_steps(2);
     assert_eq!(h.state().text, "Título\n");
 }
+
+// --- Buscar y reemplazar ---
+
+const CONTRACT: &str = "El contrato.\n\nOtro contrato y un Contrato.\n";
+
+#[test]
+fn ctrl_f_finds_the_selection_and_counts() {
+    let mut h = harness(CONTRACT, plain());
+    cursor_at(&mut h, 3);
+    select(&mut h, 3, 11);
+    chord(&mut h, Modifiers::COMMAND, Key::F);
+    h.run_steps(2);
+    assert!(h.query_by_label("1 de 3").is_some(), "la selección se busca, sin distinguir mayúsculas");
+    key(&mut h, Key::Enter);
+    h.run_steps(2);
+    assert!(h.query_by_label("2 de 3").is_some(), "Intro: la siguiente");
+    h.get_by_label("Aa").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("1 de 2").is_some() || h.query_by_label("2 de 2").is_some(), "distinguiendo mayúsculas");
+}
+
+#[test]
+fn replace_one_and_replace_all_are_undoable() {
+    let mut h = harness(CONTRACT, plain());
+    cursor_at(&mut h, 0);
+    chord(&mut h, Modifiers::COMMAND, Key::H);
+    h.get_by_label("Buscar").type_text("contrato");
+    h.run_steps(2);
+    // El foco pasa al campo en el cuadro siguiente: luego se teclea.
+    h.get_by_label("Reemplazar con").focus();
+    h.run();
+    h.get_by_label("Reemplazar con").type_text("convenio");
+    h.run_steps(2);
+    h.get_by_label("Reemplazar").click();
+    h.run_steps(2);
+    assert_eq!(h.state().text, "El convenio.\n\nOtro contrato y un Contrato.\n");
+    h.get_by_label("Reemplazar todo").click();
+    h.run_steps(2);
+    assert_eq!(h.state().text, "El convenio.\n\nOtro convenio y un convenio.\n");
+    // Deshacer: primero «todo», luego el primero.
+    h.get_by_label("doc").focus();
+    h.run_steps(2);
+    chord(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(h.state().text, "El convenio.\n\nOtro contrato y un Contrato.\n");
+}
+
+#[test]
+fn escape_selects_the_match_even_far_below() {
+    let mut text = String::new();
+    for k in 0..300 {
+        text.push_str(&format!("Párrafo {k}.\n\n"));
+    }
+    text.push_str("Aquí está la aguja.\n");
+    let mut h = harness(&text, plain());
+    cursor_at(&mut h, 0);
+    chord(&mut h, Modifiers::COMMAND, Key::F);
+    h.get_by_label("Buscar").type_text("aguja");
+    h.run_steps(3);
+    assert!(h.query_by_label("1 de 1").is_some());
+    key(&mut h, Key::Escape);
+    h.run_steps(3);
+    // La coincidencia quedó seleccionada en su bloque: teclear la cambia.
+    typed(&mut h, "hebra");
+    assert!(h.state().text.ends_with("Aquí está la hebra.\n"), "{:?}", &h.state().text[h.state().text.len() - 40..]);
+}

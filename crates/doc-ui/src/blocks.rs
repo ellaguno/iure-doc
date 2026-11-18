@@ -38,6 +38,10 @@
 //! **Corrector ortográfico** ([`crate::spell`], con [`Hooks::spell`]): subraya en rojo las palabras
 //! mal escritas (no la que se está tecleando); clic derecho: sugerencias, agregar al diccionario
 //! personal, ignorar.
+//!
+//! **Buscar y reemplazar** ([`crate::find`]): Ctrl+F / Ctrl+H abren una barra arriba del editor;
+//! las coincidencias se resaltan en los bloques visibles (los diagramas y tablas se tiñen) y el
+//! editor se desplaza hasta la actual; Esc la deja seleccionada en el texto.
 
 use std::hash::{Hash, Hasher};
 
@@ -339,6 +343,30 @@ struct State {
     cell_focus: Option<(u64, usize, usize)>,
     /// Diagramas dibujados (texturas), compartida con los hilos que dibujan.
     diagrams: crate::diagrams::Cache,
+    /// Buscar y reemplazar.
+    find: FindState,
+    /// Selección pendiente de poner en un bloque (bloque, desde, hasta), al cerrar la búsqueda.
+    select: Option<(u64, usize, usize)>,
+}
+
+/// Estado de buscar y reemplazar (Ctrl+F, Ctrl+H).
+#[derive(Clone, Default)]
+struct FindState {
+    open: bool,
+    replace: bool,
+    query: String,
+    with: String,
+    case: bool,
+    current: usize,
+    /// El campo de búsqueda toma el foco este cuadro.
+    focus_query: bool,
+    /// Desplazar hasta la coincidencia actual.
+    scroll: bool,
+    /// Coincidencias (caracteres del documento) y la huella de (texto, búsqueda, mayúsculas).
+    matches: Vec<std::ops::Range<usize>>,
+    key: u64,
+    /// Dónde estaba el cursor al abrir: la coincidencia actual es la primera desde ahí.
+    anchor: Option<usize>,
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -522,7 +550,45 @@ fn span_input(ui: &Ui, a: usize, head: usize) -> Option<SpanOp> {
 /// Pinta la selección sobre las posiciones `a..b` (caracteres del bloque) de un bloque dibujado
 /// en `pos`; `past`: la selección sigue después del bloque (se pinta hasta el final de la fila).
 fn paint_span(ui: &Ui, galley: &egui::Galley, pos: egui::Pos2, a: usize, b: usize, past: bool) {
-    let color = ui.visuals().selection.bg_fill.gamma_multiply(0.6);
+    paint_range(ui, galley, pos, a, b, past, ui.visuals().selection.bg_fill.gamma_multiply(0.6));
+}
+
+/// Coincidencias de la búsqueda: todas en ámbar suave, la actual más fuerte.
+const FIND_ALL: egui::Color32 = egui::Color32::from_rgba_premultiplied(90, 70, 0, 90);
+const FIND_CURRENT: egui::Color32 = egui::Color32::from_rgba_premultiplied(160, 90, 0, 150);
+
+/// Un bloque dibujado como imagen o cuadrícula (diagrama, tabla) con coincidencias de la búsqueda:
+/// se tiñe entero (más fuerte si tiene la actual) y, si es el destino, se desplaza hasta él.
+fn find_tint(
+    ui: &Ui,
+    st: &mut State,
+    starts: Option<&Vec<usize>>,
+    i: usize,
+    len: usize,
+    rect: egui::Rect,
+    target: bool,
+) {
+    let Some(s0) = starts.and_then(|s| s.get(i).copied()) else { return };
+    if !st.find.open {
+        return;
+    }
+    let ms = &st.find.matches;
+    let k0 = ms.partition_point(|r| r.end <= s0);
+    let hit: Vec<usize> =
+        ms.iter().enumerate().skip(k0).take_while(|(_, r)| r.start <= s0 + len).map(|(k, _)| k).collect();
+    if hit.is_empty() {
+        return;
+    }
+    let color = if hit.contains(&st.find.current) { FIND_CURRENT } else { FIND_ALL };
+    ui.painter().rect_filled(rect, 2.0, color.gamma_multiply(0.6));
+    if target {
+        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+        st.find.scroll = false;
+    }
+}
+
+/// Pinta `a..b` (caracteres del bloque) con `color`; `past`: sigue hasta el final de la fila.
+fn paint_range(ui: &Ui, galley: &egui::Galley, pos: egui::Pos2, a: usize, b: usize, past: bool, color: egui::Color32) {
     let rows = galley.rows.len();
     let mut r0 = 0usize;
     for (k, row) in galley.rows.iter().enumerate() {
@@ -541,6 +607,165 @@ fn paint_span(ui: &Ui, galley: &egui::Galley, pos: egui::Pos2, a: usize, b: usiz
             }
         }
         r0 += all;
+    }
+}
+
+/// Lo seleccionado ahora (en un bloque o entre bloques) y dónde empieza (carácter del
+/// documento), para buscarlo.
+fn selected_text(ui: &Ui, id: Id, st: &State, text: &str) -> Option<(String, usize)> {
+    if let Some((a, b)) = st.span {
+        return Some((span::slice(text, a, b), a.min(b)));
+    }
+    st.blocks.chunks.iter().find_map(|c| {
+        let fid = id.with(("block", c.uid));
+        if !ui.memory(|m| m.has_focus(fid)) {
+            return None;
+        }
+        let r = TextEditState::load(ui.ctx(), fid)?.cursor.char_range()?;
+        let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
+        (b > a).then(|| (c.content.chars().skip(a).take(b - a).collect(), st.blocks.offset_of(c.uid).saturating_add(a)))
+    })
+}
+
+/// La barra de buscar y reemplazar. Cambia `text` al reemplazar.
+fn find_bar(ui: &mut Ui, id: Id, st: &mut State, text: &mut String, now: f64, changed: &mut bool) {
+    let pick = iurefficient_ui::lang::pick;
+    // Las coincidencias, al día con el texto y la búsqueda.
+    let key = {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut h);
+        st.find.query.hash(&mut h);
+        st.find.case.hash(&mut h);
+        h.finish()
+    };
+    if key != st.find.key {
+        st.find.matches = crate::find::find_all(text, &crate::find::unescape(&st.find.query), st.find.case);
+        st.find.key = key;
+        if let Some(a) = st.find.anchor {
+            st.find.current = crate::find::first_from(&st.find.matches, a);
+        }
+        if st.find.current >= st.find.matches.len() {
+            st.find.current = 0;
+        }
+    }
+    let n = st.find.matches.len();
+    let (mut go, mut close, mut one, mut all) = (0isize, false, false, false);
+    egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 4)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            let q = ui.add(
+                egui::TextEdit::singleline(&mut st.find.query)
+                    .id(id.with("find-query"))
+                    .hint_text(pick("Find", "Buscar"))
+                    .desired_width(220.0),
+            );
+            q.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SearchInput, true, pick("Find", "Buscar")));
+            if st.find.focus_query {
+                q.request_focus();
+                st.find.focus_query = false;
+            }
+            if q.changed() {
+                st.find.scroll = true;
+            }
+            if q.lost_focus() {
+                let (enter, shift, esc) =
+                    ui.input(|i| (i.key_pressed(Key::Enter), i.modifiers.shift, i.key_pressed(Key::Escape)));
+                if enter {
+                    go = if shift { -1 } else { 1 };
+                    q.request_focus();
+                } else if esc {
+                    close = true;
+                }
+            }
+            let count = if st.find.query.is_empty() {
+                String::new()
+            } else if n == 0 {
+                pick("No results", "Sin resultados").to_string()
+            } else {
+                format!("{} {} {n}", st.find.current + 1, pick("of", "de"))
+            };
+            ui.weak(count);
+            if ui.small_button(pick("Previous", "Anterior")).on_hover_text("Mayús+Intro / Mayús+F3").clicked() {
+                go = -1;
+            }
+            if ui.small_button(pick("Next", "Siguiente")).on_hover_text("Intro / F3").clicked() {
+                go = 1;
+            }
+            let mut case = st.find.case;
+            if ui.toggle_value(&mut case, "Aa").on_hover_text(pick("Match case", "Distinguir mayúsculas")).changed() {
+                st.find.case = case;
+            }
+            if !st.find.replace && ui.small_button(pick("Replace…", "Reemplazar…")).clicked() {
+                st.find.replace = true;
+            }
+            if ui.small_button(pick("Close", "Cerrar")).on_hover_text("Esc").clicked() {
+                close = true;
+            }
+        });
+        if st.find.replace {
+            ui.horizontal(|ui| {
+                let w = ui.add(
+                    egui::TextEdit::singleline(&mut st.find.with)
+                        .id(id.with("find-with"))
+                        .hint_text(pick("Replace with", "Reemplazar con"))
+                        .desired_width(220.0),
+                );
+                w.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, pick("Replace with", "Reemplazar con"))
+                });
+                if ui.small_button(pick("Replace", "Reemplazar")).clicked() {
+                    one = true;
+                }
+                if ui.small_button(pick("Replace all", "Reemplazar todo")).clicked() {
+                    all = true;
+                }
+            });
+        }
+    });
+    let (f3, shift_f3) = ui.input_mut(|i| {
+        let back = i.consume_key(egui::Modifiers::SHIFT, Key::F3);
+        (!back && i.consume_key(egui::Modifiers::NONE, Key::F3), back)
+    });
+    if f3 {
+        go = 1;
+    } else if shift_f3 {
+        go = -1;
+    }
+    if go != 0 {
+        st.find.anchor = None;
+    }
+    if go != 0 && n > 0 {
+        st.find.current = (st.find.current as isize + go).rem_euclid(n as isize) as usize;
+        st.find.scroll = true;
+    }
+    let with = crate::find::unescape(&st.find.with);
+    let new_text = if one {
+        st.find.matches.get(st.find.current).map(|r| span::replace(text, r.start, r.end, &with).0)
+    } else if all && n > 0 {
+        st.find.current = 0;
+        Some(crate::find::replace_all(text, &st.find.matches, &with))
+    } else {
+        None
+    };
+    if let Some(t) = new_text {
+        let before = std::mem::replace(text, t);
+        st.history.record(&before, text, now);
+        st.blocks = Blocks::new(text);
+        st.hash = hash_str(text);
+        st.find.key = 0;
+        st.find.scroll = true;
+        *changed = true;
+    }
+    if close {
+        st.find.open = false;
+        // La coincidencia actual queda seleccionada en el texto.
+        if let Some(r) = st.find.matches.get(st.find.current).cloned() {
+            let starts = st.blocks.starts();
+            let idx = starts.partition_point(|&s0| s0 <= r.start).saturating_sub(1);
+            if let (Some(c), Some(&s0)) = (st.blocks.chunks.get(idx), starts.get(idx)) {
+                let len = c.content.chars().count();
+                st.select = Some((c.uid, (r.start - s0).min(len), (r.end - s0).min(len)));
+            }
+        }
     }
 }
 
@@ -692,7 +917,44 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
         }
         ui.ctx().request_repaint();
     }
-    let starts = st.span.map(|_| st.blocks.starts());
+    // Buscar (Ctrl+F) y reemplazar (Ctrl+H).
+    if st.active || st.find.open {
+        let (f, h) = ui.input_mut(|i| {
+            (i.consume_key(egui::Modifiers::COMMAND, Key::F), i.consume_key(egui::Modifiers::COMMAND, Key::H))
+        });
+        if f || h {
+            // Desde el cursor; con algo seleccionado (de una línea), eso se busca desde su inicio.
+            st.find.anchor = st.caret.map(|(u, p)| st.blocks.offset_of(u).saturating_add(p));
+            if let Some((sel, at)) = selected_text(ui, id, &st, text)
+                && !sel.is_empty()
+                && !sel.contains('\n')
+            {
+                st.find.query = sel;
+                st.find.anchor = Some(at);
+            }
+            st.find.key = 0;
+            st.find.open = true;
+            st.find.replace = h;
+            st.find.focus_query = true;
+            st.find.scroll = true;
+        }
+    }
+    if st.find.open {
+        find_bar(ui, id, &mut st, text, now, &mut changed);
+    }
+    let finding = st.find.open && !st.find.matches.is_empty();
+    let starts = (st.span.is_some() || finding).then(|| st.blocks.starts());
+    // El bloque de la coincidencia actual (para desplazarse hasta él).
+    let scroll_to = if finding && st.find.scroll {
+        st.find.matches.get(st.find.current).and_then(|r| {
+            let s = starts.as_ref()?;
+            let idx = s.partition_point(|&s0| s0 <= r.start).saturating_sub(1);
+            st.blocks.chunks.get(idx).map(|c| c.uid)
+        })
+    } else {
+        None
+    };
+    let select_uid = st.select.map(|x| x.0);
     let shift = ui.input(|i| i.modifiers.shift);
     let pointer_busy = ui.input(|i| i.pointer.any_down() || i.pointer.any_released());
     let row_h = (style.size * 1.35).max(1.0);
@@ -731,7 +993,8 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                     c.raw = false;
                 }
                 let seen = y + c.height + g >= viewport.min.y - margin && y <= viewport.max.y + margin;
-                if !(seen || focused || wanted.is_some() || in_table) {
+                let pinned = scroll_to == Some(c.uid) || select_uid == Some(c.uid);
+                if !(seen || focused || wanted.is_some() || in_table || pinned) {
                     space += c.height + g;
                     y += c.height + g;
                     continue;
@@ -808,6 +1071,8 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                             }
                         };
                         if let Some(rd) = resp_d {
+                            let len = st.blocks.chunks.get(i).map_or(0, |c| c.content.chars().count());
+                            find_tint(ui, &mut st, starts.as_ref(), i, len, rd.rect, scroll_to == Some(uid));
                             let dh = rd.rect.height();
                             if let Some(c) = st.blocks.chunks.get_mut(i) {
                                 c.height = dh;
@@ -885,6 +1150,8 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                         }
                         None => {}
                     }
+                    let len = st.blocks.chunks.get(i).map_or(0, |c| c.content.chars().count());
+                    find_tint(ui, &mut st, starts.as_ref(), i, len, out.rect, scroll_to == Some(uid));
                     let th = out.rect.height();
                     if let Some(c) = st.blocks.chunks.get_mut(i) {
                         c.height = th;
@@ -910,6 +1177,16 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                     s.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
                     s.store(ui.ctx(), fid);
                     ui.memory_mut(|m| m.request_focus(fid));
+                }
+                if let Some((u, a, b)) = st.select
+                    && select_uid == Some(u)
+                    && st.blocks.chunks.get(i).is_some_and(|c| c.uid == u)
+                {
+                    let mut s = TextEditState::load(ui.ctx(), fid).unwrap_or_default();
+                    s.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(a), CCursor::new(b))));
+                    s.store(ui.ctx(), fid);
+                    ui.memory_mut(|m| m.request_focus(fid));
+                    st.select = None;
                 }
                 if focused && act.is_none() {
                     act = block_key(ui, fid, &st.blocks, i);
@@ -949,6 +1226,31 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                             hi > s0 + len,
                         );
                     }
+                }
+                // Las coincidencias de la búsqueda en este bloque.
+                if finding && let Some(starts) = starts.as_ref() {
+                    let s0 = starts.get(i).copied().unwrap_or(0);
+                    let ms = &st.find.matches;
+                    let k0 = ms.partition_point(|r| r.end <= s0);
+                    for (k, r) in ms.iter().enumerate().skip(k0) {
+                        if r.start > s0 + len {
+                            break;
+                        }
+                        let color = if k == st.find.current { FIND_CURRENT } else { FIND_ALL };
+                        paint_range(
+                            ui,
+                            &out.galley,
+                            out.galley_pos,
+                            r.start.saturating_sub(s0),
+                            (r.end - s0).min(len),
+                            r.end > s0 + len,
+                            color,
+                        );
+                    }
+                }
+                if scroll_to == Some(uid) {
+                    out.response.response.scroll_to_me(Some(egui::Align::Center));
+                    st.find.scroll = false;
                 }
                 let r = &out.response.response;
                 let primary = out.state.cursor.char_range().map_or(0, |x| x.primary.index.0);

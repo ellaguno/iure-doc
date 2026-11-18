@@ -42,6 +42,7 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
 
 mod blocks;
 mod diagrams;
+mod find;
 mod history;
 mod images;
 mod paste;

@@ -4,7 +4,7 @@ S1.22 de `iuredesk/docs/gaps.md`: lista de lo que hace hoy IureEditor (Tauri + T
 en el editor de la suite (`iure-doc-ui`, el de IureEditor 2.0 y las notas de IureDesk). **El dueño
 la firma antes de S1.15** (retirar la versión Tauri al lograr paridad en lo que la gente usa).
 
-Estado al 2026-11-18 (`iure-doc` v0.8.0). ✅ hecho · ◐ parcial · ❌ falta · — no aplica.
+Estado al 2026-11-18 (`iure-doc` v0.9.0). ✅ hecho · ◐ parcial · ❌ falta · — no aplica.
 
 ## Edición (P0, uso diario)
 
@@ -20,7 +20,7 @@ Estado al 2026-11-18 (`iure-doc` v0.8.0). ✅ hecho · ◐ parcial · ❌ falta 
 | Selección entre bloques | ✅ | Ctrl+A, Mayús+flechas, Mayús+clic, arrastrar |
 | Intro inteligente, Tab en listas | ✅ | Tareas nuevas sin marcar, salir de la lista en vacío, título → párrafo, tres Intro salen del código |
 | Atajos | ◐ | Ctrl+B/I, Ctrl+Mayús+X/K, Ctrl+Mayús+7/8/9, Ctrl+Alt+1–3. **Faltan en la paleta de comandos** y Ctrl+U (no hay subrayado en Markdown) |
-| Buscar y reemplazar | ❌ | TipTap: en el documento y en los archivos de la carpeta, con `\n`. **Siguiente prioridad P0** |
+| Buscar y reemplazar | ◐ | En el documento: Ctrl+F / Ctrl+H, «n de m», Intro/Mayús+Intro/F3, «Aa», `\n` y `\t`, reemplazar uno o todo (un paso de deshacer), resaltado y desplazamiento, Esc deja la coincidencia seleccionada. **Falta**: buscar en los archivos de la carpeta (IureEditor 2.0) y expresiones regulares |
 | IME y acentos | ◐ | Los de egui (acentos con tecla muerta funcionan); **sin probar con IME de chino/japonés** |
 | Guardado automático y recuperación de borradores | ◐ | IureDesk guarda solo; IureEditor 2.0 **aún no** (TipTap: autoguardado y recuperación tras cierre) |
 | Corrector ortográfico | ◐ | Hunspell del sistema (es + en), sugerencias, diccionario personal; **sin diccionarios en Windows/macOS** |

@@ -13,6 +13,7 @@ iure-doc.workspace = true
 iurefficient-ui.workspace = true
 pulldown-cmark.workspace = true
 image.workspace = true
+arboard.workspace = true
 
 [dev-dependencies]
 egui_kittest.workspace = true

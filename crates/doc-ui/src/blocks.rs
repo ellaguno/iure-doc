@@ -31,6 +31,9 @@
 //!
 //! **Imágenes en su lugar** ([`crate::images`]): un párrafo que es solo una imagen local se ve como
 //! la imagen (con [`crate::LocalImages`] entre los dibujantes).
+//!
+//! **Pegar HTML como Markdown** ([`crate::paste`], con [`Hooks::paste`]): lo copiado de la web,
+//! Word o Google Docs se pega con su estructura; en un bloque de código, el texto plano.
 
 use std::hash::{Hash, Hasher};
 
@@ -44,6 +47,7 @@ use std::sync::Arc;
 use iure_doc::table::Grid;
 
 use crate::diagrams::{DiagramRenderer, View};
+use crate::paste::PasteSource;
 use crate::table_ui::{self, TableAct};
 use crate::{EditorStyle, Output, cached_galley, field, span, style_key};
 
@@ -514,6 +518,21 @@ pub fn show_with(
     hint: &str,
     diagrams: Option<Arc<dyn DiagramRenderer>>,
 ) -> Output {
+    show_hooks(ui, id, text, hint, Hooks { diagrams, paste: None })
+}
+
+/// Lo que la app le da al editor: quién dibuja diagramas e imágenes, de dónde sale el HTML al
+/// pegar.
+#[derive(Clone, Default)]
+pub struct Hooks {
+    pub diagrams: Option<Arc<dyn DiagramRenderer>>,
+    /// Con ella, pegar HTML (de la web, Word, Google Docs…) pega su Markdown.
+    pub paste: Option<Arc<dyn PasteSource>>,
+}
+
+/// Como [`show`], con los ganchos de la app.
+pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hooks) -> Output {
+    let diagrams = hooks.diagrams.clone();
     let style = EditorStyle::from_ui(ui);
     let skey = style_key(&style);
     let h = hash_str(text);
@@ -560,6 +579,30 @@ pub fn show_with(
         st.hash = h;
         st.focus = keep.map(|g| st.blocks.at_offset(g));
         st.history.clear();
+    }
+    // Pegar HTML como Markdown (fuera de los bloques de código), antes que la selección y los
+    // campos.
+    if st.active
+        && let Some(p) = hooks.paste.as_ref()
+        && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
+    {
+        let focused = st.blocks.chunks.iter().find(|c| ui.memory(|m| m.has_focus(id.with(("block", c.uid)))));
+        let in_code = focused.is_some_and(|c| crate::paste::in_code_block(&c.content));
+        // ¿El cursor está al principio / al final de su línea?
+        let (line_start, line_end) = focused
+            .and_then(|c| {
+                let fid = id.with(("block", c.uid));
+                let r = TextEditState::load(ui.ctx(), fid)?.cursor.char_range()?;
+                let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
+                let chars: Vec<char> = c.content.chars().collect();
+                let start = a == 0 || chars.get(a - 1) == Some(&'\n');
+                let end = chars.get(b).is_none_or(|x| *x == '\n');
+                Some((start, end))
+            })
+            .unwrap_or((true, true));
+        if !in_code {
+            crate::paste::rewrite(ui, p.as_ref(), line_start, line_end);
+        }
     }
     // Selección entre bloques: Ctrl+A la crea; con ella, teclas y portapapeles son del editor.
     if !st.active {

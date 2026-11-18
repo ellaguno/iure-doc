@@ -30,6 +30,7 @@
 )]
 
 pub mod edit;
+pub mod html;
 mod parse;
 pub mod table;
 pub mod write;

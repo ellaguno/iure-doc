@@ -404,3 +404,51 @@ fn an_image_as_the_first_block_keeps_its_name() {
     let mut h = images_harness("![Punto](p.png)\n", dir.path().to_path_buf());
     assert!(wait_for(&mut h, "Imagen 1: Punto"));
 }
+
+// --- Pegar HTML como Markdown ---
+
+struct FakePaste(&'static str);
+
+impl iure_doc_ui::PasteSource for FakePaste {
+    fn html(&self) -> Option<String> {
+        Some(self.0.to_string())
+    }
+}
+
+fn paste_harness(text: &str, html: &'static str) -> Harness<'static, State> {
+    let hooks = iure_doc_ui::Hooks { diagrams: None, paste: Some(std::sync::Arc::new(FakePaste(html))) };
+    Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("pg"), &mut st.text, "Escribe", hooks.clone());
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        State { text: text.to_string() },
+    )
+}
+
+#[test]
+fn pasting_html_pastes_its_markdown() {
+    let mut h = paste_harness("Antes\n", "<h2>Acuerdos</h2><ul><li><b>uno</b></li><li>dos</li></ul>");
+    block_cursor_at(&mut h, 5);
+    h.event(egui::Event::Paste("Acuerdos\nuno\ndos".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().text, "Antes\n\n## Acuerdos\n\n- **uno**\n- dos\n", "los bloques, en bloques propios");
+}
+
+#[test]
+fn inline_html_is_pasted_inline() {
+    let mut h = paste_harness("ab\n", "<span>hola <b>mundo</b></span>");
+    block_cursor_at(&mut h, 1);
+    h.event(egui::Event::Paste("hola mundo".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().text, "ahola **mundo**b\n");
+}
+
+#[test]
+fn inside_a_code_block_the_plain_text_is_pasted() {
+    let mut h = paste_harness("```\nx\n```\n", "<p><b>no</b></p>");
+    block_cursor_at(&mut h, 5);
+    h.event(egui::Event::Paste("plano".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().text, "```\nxplano\n```\n");
+}

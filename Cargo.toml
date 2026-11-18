@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/doc", "crates/doc-ui"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
@@ -16,11 +16,15 @@ repository = "https://github.com/ellaguno/iure-doc"
 iure-doc = { path = "crates/doc" }
 pulldown-cmark = { version = "0.13", default-features = false }
 serde_json = "1"
+# Pegar HTML como Markdown (tokenizador, Rust puro; la misma versión que IureDesk).
+html5ever = "0.40"
 # ui: egui 0.37 en toda la suite; el kit compartido fija la misma versión.
 egui = "0.37"
 iurefficient-ui = { git = "https://github.com/ellaguno/iurefficient-ui", branch = "main" }
 # Imágenes en su lugar (Rust puro; los mismos formatos que IureDesk).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+# Leer el HTML del portapapeles al pegar (Rust puro: x11rb y wl-clipboard-rs en Linux).
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 # pruebas
 proptest = "1"
 tempfile = "3"

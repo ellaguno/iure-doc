@@ -44,11 +44,13 @@ mod blocks;
 mod diagrams;
 mod history;
 mod images;
+mod paste;
 mod span;
 mod table_ui;
-pub use blocks::{show as show_blocks, show_with as show_blocks_with};
+pub use blocks::{Hooks, show as show_blocks, show_hooks as show_blocks_hooks, show_with as show_blocks_with};
 pub use diagrams::{DiagramImage, DiagramRenderer};
 pub use images::{LocalImages, Renderers};
+pub use paste::{PasteSource, SystemClipboard};
 
 /// Colores y letra del editor.
 #[derive(Clone, Debug, PartialEq)]

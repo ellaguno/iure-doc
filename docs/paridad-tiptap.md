@@ -53,7 +53,7 @@ Estado al 2026-11-18 (`iure-doc` v0.11.0). ✅ hecho · ◐ parcial · ❌ falta
 | Función | Estado | Notas |
 |---|---|---|
 | Abrir, guardar, guardar como, nuevo, avisos de cambios | ✅ | |
-| Pestañas, ventana por pestaña | ❌ | |
+| Pestañas, ventana por pestaña | ◐ | Pestañas (cada una con su deshacer y su borrador), Ctrl+T/W/Tab, sesión restaurada al abrir. **Falta**: desacoplar una pestaña en su propia ventana |
 | Plantillas | ❌ | |
 | Exportar PDF, DOCX, HTML | ❌ | S1.14 |
 | Vista de código fuente | — | Markdown en vivo: el texto ya es el código |

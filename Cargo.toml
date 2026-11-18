@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/doc", "crates/doc-ui"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
@@ -25,6 +25,8 @@ iurefficient-ui = { git = "https://github.com/ellaguno/iurefficient-ui", branch 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 # Leer el HTML del portapapeles al pegar (Rust puro: x11rb y wl-clipboard-rs en Linux).
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
+# Corrector ortográfico con diccionarios Hunspell (Rust puro, MPL-2.0).
+spellbook = "0.4"
 # pruebas
 proptest = "1"
 tempfile = "3"

@@ -34,6 +34,10 @@
 //!
 //! **Pegar HTML como Markdown** ([`crate::paste`], con [`Hooks::paste`]): lo copiado de la web,
 //! Word o Google Docs se pega con su estructura; en un bloque de código, el texto plano.
+//!
+//! **Corrector ortográfico** ([`crate::spell`], con [`Hooks::spell`]): subraya en rojo las palabras
+//! mal escritas (no la que se está tecleando); clic derecho: sugerencias, agregar al diccionario
+//! personal, ignorar.
 
 use std::hash::{Hash, Hasher};
 
@@ -518,7 +522,7 @@ pub fn show_with(
     hint: &str,
     diagrams: Option<Arc<dyn DiagramRenderer>>,
 ) -> Output {
-    show_hooks(ui, id, text, hint, Hooks { diagrams, paste: None })
+    show_hooks(ui, id, text, hint, Hooks { diagrams, paste: None, spell: None })
 }
 
 /// Lo que la app le da al editor: quién dibuja diagramas e imágenes, de dónde sale el HTML al
@@ -528,6 +532,8 @@ pub struct Hooks {
     pub diagrams: Option<Arc<dyn DiagramRenderer>>,
     /// Con ella, pegar HTML (de la web, Word, Google Docs…) pega su Markdown.
     pub paste: Option<Arc<dyn PasteSource>>,
+    /// Corrector ortográfico: subraya y sugiere con clic derecho.
+    pub spell: Option<Arc<crate::Speller>>,
 }
 
 /// Como [`show`], con los ganchos de la app.
@@ -873,7 +879,7 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                 }
                 let Some(c) = st.blocks.chunks.get_mut(i) else { break };
                 let hint = if only && c.content.is_empty() { hint } else { "" };
-                let (changed, out) = field(ui, fid, &mut c.content, hint, 1, &style, skey);
+                let (changed, out) = field(ui, fid, &mut c.content, hint, 1, &style, skey, hooks.spell.as_deref());
                 c.height = out.response.response.rect.height();
                 let mut ch = c.height;
                 // Un diagrama con error: el código y, debajo, qué falla.

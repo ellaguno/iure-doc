@@ -46,11 +46,13 @@ mod history;
 mod images;
 mod paste;
 mod span;
+pub mod spell;
 mod table_ui;
 pub use blocks::{Hooks, show as show_blocks, show_hooks as show_blocks_hooks, show_with as show_blocks_with};
 pub use diagrams::{DiagramImage, DiagramRenderer};
 pub use images::{LocalImages, Renderers};
 pub use paste::{PasteSource, SystemClipboard};
+pub use spell::Speller;
 
 /// Colores y letra del editor.
 #[derive(Clone, Debug, PartialEq)]
@@ -66,6 +68,8 @@ pub struct EditorStyle {
     /// Familia en negrita (la del ui-kit).
     pub bold_family: FontFamily,
     pub body_family: FontFamily,
+    /// Subrayado de las palabras mal escritas.
+    pub error: Color32,
 }
 
 impl EditorStyle {
@@ -82,6 +86,7 @@ impl EditorStyle {
             size: body.size,
             bold_family: bold.family,
             body_family: body.family,
+            error: ui.visuals().error_fg_color,
         }
     }
 }
@@ -105,6 +110,8 @@ struct Fmt {
     quote: bool,
     /// Oculta (marca en línea fuera de la línea del cursor).
     hidden: bool,
+    /// Palabra mal escrita (subrayada).
+    misspelled: bool,
 }
 
 fn inline_marker(x: &mut Fmt) {
@@ -295,7 +302,13 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
         italics: fmt.italic || (fmt.quote && !fmt.marker),
         background: if fmt.code && !fmt.marker { s.code_bg } else { Color32::TRANSPARENT },
         strikethrough: if fmt.strike && !fmt.marker { Stroke::new(1.0, s.text) } else { Stroke::NONE },
-        underline: if fmt.link && !fmt.marker { Stroke::new(1.0, s.accent) } else { Stroke::NONE },
+        underline: if fmt.misspelled && !fmt.marker {
+            Stroke::new(1.5, s.error)
+        } else if fmt.link && !fmt.marker {
+            Stroke::new(1.0, s.accent)
+        } else {
+            Stroke::NONE
+        },
         ..Default::default()
     }
 }
@@ -304,7 +317,35 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
 /// (bytes de la línea del cursor; `None` sin cursor) se ocultan: la negrita se ve como negrita y
 /// el enlace como enlace; en la línea donde se escribe se ven para poder borrarlas.
 pub fn layout_job(text: &str, s: &EditorStyle, wrap_width: f32, reveal: Option<std::ops::Range<usize>>) -> LayoutJob {
+    layout_job_spell(text, s, wrap_width, reveal, None, None)
+}
+
+/// Bytes que el corrector no revisa: código y marcas de Markdown.
+fn spell_skip(f: &[Fmt], i: usize) -> bool {
+    f.get(i).is_some_and(|x| x.code || x.marker)
+}
+
+/// Como [`layout_job`], con las palabras mal escritas subrayadas (menos la que se está tecleando,
+/// la que toca `typing`, en bytes).
+pub(crate) fn layout_job_spell(
+    text: &str,
+    s: &EditorStyle,
+    wrap_width: f32,
+    reveal: Option<std::ops::Range<usize>>,
+    spell: Option<&Speller>,
+    typing: Option<usize>,
+) -> LayoutJob {
     let mut f = formats(text);
+    if let Some(sp) = spell {
+        for r in sp.misspelled(text, |i| spell_skip(&f, i)) {
+            if typing.is_some_and(|t| r.start <= t && t <= r.end) {
+                continue;
+            }
+            for x in f.get_mut(r).into_iter().flatten() {
+                x.misspelled = true;
+            }
+        }
+    }
     for (i, x) in f.iter_mut().enumerate() {
         x.hidden = x.inline && !reveal.as_ref().is_some_and(|r| r.contains(&i) || r.end == i);
     }
@@ -377,7 +418,7 @@ fn editor_key(ui: &Ui, text: &str, sel: (usize, usize)) -> Option<Edit> {
 /// El editor. `id` identifica su estado (cursor, deshacer) entre cuadros.
 pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
     let style = EditorStyle::from_ui(ui);
-    let (changed, out) = field(ui, id, text, hint, 16, &style, style_key(&style));
+    let (changed, out) = field(ui, id, text, hint, 16, &style, style_key(&style), None);
     Output { changed, response: out.response.response }
 }
 
@@ -398,6 +439,7 @@ pub(crate) fn field(
     rows: usize,
     style: &EditorStyle,
     style_key: u64,
+    spell: Option<&Speller>,
 ) -> (bool, egui::text_edit::TextEditOutput) {
     let mut changed = false;
     if ui.memory(|m| m.has_focus(id))
@@ -425,6 +467,15 @@ pub(crate) fn field(
     } else {
         None
     };
+    // Dónde se teclea (bytes): esa palabra no se marca mientras se escribe.
+    let typing = if spell.is_some() && ui.memory(|m| m.has_focus(id)) {
+        TextEditState::load(ui.ctx(), id)
+            .and_then(|st| st.cursor.char_range())
+            .map(|r| text.char_indices().nth(r.primary.index.0).map_or(text.len(), |(i, _)| i))
+    } else {
+        None
+    };
+    let spell_gen = spell.map(Speller::generation);
     // Caché del dibujo: si no cambian el texto, la línea del cursor, el ancho ni el estilo (lo
     // normal mientras el cursor parpadea o se desplaza la vista), no se vuelve a calcular.
     let cache_id = id.with("galley");
@@ -435,13 +486,16 @@ pub(crate) fn field(
         reveal.hash(&mut h);
         wrap.to_bits().hash(&mut h);
         style_key.hash(&mut h);
+        spell_gen.hash(&mut h);
+        typing.hash(&mut h);
         let key = h.finish();
         if let Some((k, g)) = ui.data(|d| d.get_temp::<(u64, Arc<egui::Galley>)>(cache_id))
             && k == key
         {
             return g;
         }
-        let g = ui.fonts_mut(|f| f.layout_job(layout_job(buf.as_str(), style, wrap, reveal.clone())));
+        let g =
+            ui.fonts_mut(|f| f.layout_job(layout_job_spell(buf.as_str(), style, wrap, reveal.clone(), spell, typing)));
         ui.data_mut(|d| d.insert_temp(cache_id, (key, Arc::clone(&g))));
         g
     };
@@ -455,7 +509,60 @@ pub(crate) fn field(
         .layouter(&mut layouter)
         .show(ui);
     changed |= out.response.changed();
+    if let Some(sp) = spell {
+        changed |= spell_menu(ui, id, text, sp, &out);
+    }
     (changed, out)
+}
+
+/// Palabra mal escrita bajo el clic derecho: (bytes, palabra, sugerencias).
+type SpellHit = Option<(std::ops::Range<usize>, String, Vec<String>)>;
+
+/// Clic derecho sobre una palabra mal escrita: sugerencias, agregar al diccionario, ignorar.
+/// `true` si cambió el texto.
+fn spell_menu(ui: &Ui, id: Id, text: &mut String, sp: &Speller, out: &egui::text_edit::TextEditOutput) -> bool {
+    let menu_id = id.with("spell-menu");
+    let resp = &out.response.response;
+    if resp.secondary_clicked() {
+        let hit: SpellHit = ui.input(|i| i.pointer.interact_pos()).and_then(|p| {
+            let c = out.galley.cursor_from_pos(p - out.galley_pos).index.0;
+            let b = text.char_indices().nth(c).map_or(text.len(), |(i, _)| i);
+            let f = formats(text);
+            let r = sp.misspelled(text, |i| spell_skip(&f, i)).into_iter().find(|r| r.start <= b && b <= r.end)?;
+            let w = text.get(r.clone())?.to_string();
+            let sug = sp.suggest(&w);
+            Some((r, w, sug))
+        });
+        ui.data_mut(|d| d.insert_temp(menu_id, hit));
+    }
+    let hit: SpellHit = ui.data(|d| d.get_temp::<SpellHit>(menu_id)).flatten();
+    let Some((r, w, sug)) = hit else { return false };
+    let mut changed = false;
+    resp.context_menu(|ui| {
+        let pick = iurefficient_ui::lang::pick;
+        if sug.is_empty() {
+            ui.weak(pick("No suggestions", "Sin sugerencias"));
+        }
+        for s in &sug {
+            if ui.button(s).clicked() {
+                if text.get(r.clone()) == Some(w.as_str()) {
+                    text.replace_range(r.clone(), s);
+                    changed = true;
+                }
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui.button(format!("{} «{w}»", pick("Add to dictionary", "Agregar al diccionario"))).clicked() {
+            sp.add(&w);
+            ui.close();
+        }
+        if ui.button(pick("Ignore", "Ignorar")).clicked() {
+            sp.ignore(&w);
+            ui.close();
+        }
+    });
+    changed
 }
 
 /// El último dibujo de un campo (para saber en qué fila está el cursor).
@@ -498,6 +605,7 @@ mod tests {
             size: 14.0,
             bold_family: FontFamily::Proportional,
             body_family: FontFamily::Proportional,
+            error: Color32::RED,
         };
         let t = "uno **dos**\ntres **cuatro**\n- lista";
         let hidden = |job: &LayoutJob, needle: &str| {
@@ -517,6 +625,41 @@ mod tests {
     }
 
     #[test]
+    fn misspelled_words_are_underlined_except_while_typing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("es_MX.aff"), "SET UTF-8\nTRY esianrtolcdugmphbyfvkwz\n").unwrap();
+        std::fs::write(dir.path().join("es_MX.dic"), "2\nhola\nmundo\n").unwrap();
+        let sp = Speller::new(&["es"], vec![dir.path().to_path_buf()], None);
+        for _ in 0..500 {
+            if sp.is_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let s = EditorStyle {
+            text: Color32::BLACK,
+            muted: Color32::GRAY,
+            accent: Color32::BLUE,
+            code_bg: Color32::LIGHT_GRAY,
+            size: 14.0,
+            bold_family: FontFamily::Proportional,
+            body_family: FontFamily::Proportional,
+            error: Color32::RED,
+        };
+        let t = "hola holla `holla` mundo";
+        let red = |job: &LayoutJob, at: usize| {
+            job.sections.iter().any(|x| {
+                x.byte_range.start.0 <= at && at < x.byte_range.end.0 && x.format.underline.color == Color32::RED
+            })
+        };
+        let job = layout_job_spell(t, &s, 300.0, None, Some(&sp), None);
+        assert!(red(&job, 6), "«holla» subrayada");
+        assert!(!red(&job, 1) && !red(&job, 13), "bien escrita y dentro de código, no");
+        let job = layout_job_spell(t, &s, 300.0, None, Some(&sp), Some(10));
+        assert!(!red(&job, 6), "no mientras se teclea");
+    }
+
+    #[test]
     fn layout_covers_every_byte() {
         let s = EditorStyle {
             text: Color32::BLACK,
@@ -526,6 +669,7 @@ mod tests {
             size: 14.0,
             bold_family: FontFamily::Proportional,
             body_family: FontFamily::Proportional,
+            error: Color32::RED,
         };
         for t in ["", "hola", "# a\n**b** ñú `c`\n- [x] d", "```\ncódigo\n```"] {
             let job = layout_job(t, &s, 300.0, None);
@@ -554,6 +698,7 @@ mod perf {
             size: 14.0,
             bold_family: FontFamily::Proportional,
             body_family: FontFamily::Proportional,
+            error: Color32::RED,
         };
         let tf = std::time::Instant::now();
         let _f = formats(&text);

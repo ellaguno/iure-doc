@@ -416,7 +416,7 @@ impl iure_doc_ui::PasteSource for FakePaste {
 }
 
 fn paste_harness(text: &str, html: &'static str) -> Harness<'static, State> {
-    let hooks = iure_doc_ui::Hooks { diagrams: None, paste: Some(std::sync::Arc::new(FakePaste(html))) };
+    let hooks = iure_doc_ui::Hooks { paste: Some(std::sync::Arc::new(FakePaste(html))), ..Default::default() };
     Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
         move |ui, st: &mut State| {
             let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("pg"), &mut st.text, "Escribe", hooks.clone());
@@ -451,4 +451,52 @@ fn inside_a_code_block_the_plain_text_is_pasted() {
     h.event(egui::Event::Paste("plano".into()));
     h.run_steps(3);
     assert_eq!(h.state().text, "```\nxplano\n```\n");
+}
+
+// --- Corrector ---
+
+fn spell_harness(text: &str) -> (Harness<'static, State>, std::sync::Arc<iure_doc_ui::Speller>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("es_MX.aff"), "SET UTF-8\nTRY esianrtolcdugmphbyfvkwz\n").unwrap();
+    std::fs::write(dir.path().join("es_MX.dic"), "2\nhola\nmundo\n").unwrap();
+    let sp = iure_doc_ui::Speller::new(&["es"], vec![dir.path().to_path_buf()], Some(dir.path().join("personal.txt")));
+    for _ in 0..500 {
+        if sp.is_ready() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let hooks = iure_doc_ui::Hooks { diagrams: None, paste: None, spell: Some(sp.clone()) };
+    let h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("sp"), &mut st.text, "Escribe", hooks.clone());
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        State { text: text.to_string() },
+    );
+    (h, sp, dir)
+}
+
+#[test]
+fn right_click_on_a_misspelled_word_offers_suggestions() {
+    let (mut h, _sp, _dir) = spell_harness("holla\n");
+    h.run_steps(2);
+    h.get_by_label("bloques").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("hola").click();
+    h.run_steps(3);
+    assert_eq!(h.state().text, "hola\n");
+}
+
+#[test]
+fn adding_a_word_to_the_dictionary_stops_marking_it() {
+    let (mut h, sp, dir) = spell_harness("Altamira\n");
+    h.run_steps(2);
+    h.get_by_label("bloques").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Agregar al diccionario «Altamira»").click();
+    h.run_steps(2);
+    assert!(sp.check("Altamira"));
+    assert_eq!(std::fs::read_to_string(dir.path().join("personal.txt")).unwrap(), "altamira\n");
+    assert_eq!(h.state().text, "Altamira\n", "el texto no cambia");
 }

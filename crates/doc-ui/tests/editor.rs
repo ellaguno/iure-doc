@@ -292,3 +292,71 @@ fn the_toolbar_adds_columns_and_shows_the_markdown() {
     h.run_steps(3);
     assert!(h.query_by_label("Fila 1, columna 1").is_none(), "se edita como texto");
 }
+
+// --- Diagramas en su lugar ---
+
+struct FakeDiagrams;
+
+impl iure_doc_ui::DiagramRenderer for FakeDiagrams {
+    fn accepts(&self, block: &str) -> bool {
+        block.starts_with("```mermaid") && block.trim_end().ends_with("```")
+    }
+    fn key(&self) -> u64 {
+        1
+    }
+    fn render(&self, block: &str, _scale: f32) -> Result<iure_doc_ui::DiagramImage, String> {
+        if block.contains("mal") {
+            return Err("La línea 2 no se entiende.".into());
+        }
+        Ok(iure_doc_ui::DiagramImage { width: 20, height: 10, rgba: vec![200; 20 * 10 * 4], points: [200.0, 100.0] })
+    }
+}
+
+const DIAGRAM_DOC: &str = "Antes\n\n```mermaid\nflowchart LR\n  A-->B\n```\n\nDespués\n";
+
+fn diagram_harness(text: &str) -> Harness<'static, State> {
+    let r: std::sync::Arc<dyn iure_doc_ui::DiagramRenderer> = std::sync::Arc::new(FakeDiagrams);
+    Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let out = iure_doc_ui::show_blocks_with(ui, Id::unique("dg"), &mut st.text, "Escribe", Some(r.clone()));
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        State { text: text.to_string() },
+    )
+}
+
+/// Corre cuadros hasta que aparece `label` (el dibujo llega de otro hilo).
+fn wait_for(h: &mut Harness<'static, State>, label: &str) -> bool {
+    for _ in 0..200 {
+        h.step();
+        if h.query_by_label(label).is_some() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    false
+}
+
+#[test]
+fn diagrams_are_drawn_in_place_and_a_click_edits_the_code() {
+    let mut h = diagram_harness(DIAGRAM_DOC);
+    assert!(wait_for(&mut h, "Diagrama 2"), "la imagen en el lugar del bloque");
+    assert_eq!(h.state().text, DIAGRAM_DOC);
+    h.get_by_label("Diagrama 2").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Diagrama 2").is_none(), "se ve el código");
+    h.get_by_label("bloques").type_text("%% ");
+    h.run_steps(2);
+    assert_eq!(
+        h.state().text,
+        "Antes\n\n%% ```mermaid\nflowchart LR\n  A-->B\n```\n\nDespués\n",
+        "el cursor al inicio del código"
+    );
+}
+
+#[test]
+fn a_diagram_with_an_error_shows_the_code_and_what_fails() {
+    let mut h = diagram_harness("```mermaid\nflowchart LR\n  mal\n```\n");
+    assert!(wait_for(&mut h, "La línea 2 no se entiende."), "el error en palabras");
+    assert!(h.query_by_label("Diagrama 1").is_none());
+}

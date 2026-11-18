@@ -25,6 +25,9 @@
 //!
 //! **Tablas en su lugar** ([`crate::table_ui`]): un bloque que es una tabla se ve como cuadrícula
 //! de celdas; solo se reescribe (con las columnas alineadas) si se cambia.
+//!
+//! **Diagramas en su lugar** ([`crate::diagrams`], con [`show_with`]): los bloques que la app sabe
+//! dibujar se ven como imagen; un clic o entrar con las flechas muestra su código.
 
 use std::hash::{Hash, Hasher};
 
@@ -37,6 +40,7 @@ use std::sync::Arc;
 
 use iure_doc::table::Grid;
 
+use crate::diagrams::{DiagramRenderer, View};
 use crate::table_ui::{self, TableAct};
 use crate::{EditorStyle, Output, cached_galley, field, span, style_key};
 
@@ -291,6 +295,8 @@ struct State {
     cell: Option<(u64, usize, usize)>,
     /// Celda que toma el foco cuando se dibuje.
     cell_focus: Option<(u64, usize, usize)>,
+    /// Diagramas dibujados (texturas), compartida con los hilos que dibujan.
+    diagrams: crate::diagrams::Cache,
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -491,6 +497,17 @@ fn paint_span(ui: &Ui, galley: &egui::Galley, pos: egui::Pos2, a: usize, b: usiz
 
 /// El editor por bloques, con su propio desplazamiento. `id` identifica su estado entre cuadros.
 pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
+    show_with(ui, id, text, hint, None)
+}
+
+/// Como [`show`], con los diagramas que la app sabe dibujar en su lugar.
+pub fn show_with(
+    ui: &mut Ui,
+    id: Id,
+    text: &mut String,
+    hint: &str,
+    diagrams: Option<Arc<dyn DiagramRenderer>>,
+) -> Output {
     let style = EditorStyle::from_ui(ui);
     let skey = style_key(&style);
     let h = hash_str(text);
@@ -631,6 +648,87 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
                     ui.add_space(space);
                     space = 0.0;
                 }
+                // Un diagrama que la app sabe dibujar: la imagen en su lugar (con el foco en su
+                // campo se edita el código).
+                let mut diagram_error: Option<String> = None;
+                if let Some(r) = diagrams.as_ref()
+                    && let Some(c) = st.blocks.chunks.get_mut(i)
+                    && !c.raw
+                    && !focused
+                    && r.accepts(&c.content)
+                {
+                    if wanted.is_some() {
+                        // Entrar con las flechas: se edita el código.
+                        c.raw = true;
+                    } else {
+                        let uid = c.uid;
+                        let resp_d = match st.diagrams.get(ui.ctx(), r, &c.content) {
+                            View::Failed(e) => {
+                                diagram_error = Some(e);
+                                None
+                            }
+                            View::Pending => {
+                                let h = c.height.max(48.0);
+                                let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
+                                ui.painter().text(
+                                    rect.left_center() + egui::vec2(4.0, 0.0),
+                                    egui::Align2::LEFT_CENTER,
+                                    iurefficient_ui::lang::pick("Drawing the diagram…", "Dibujando el diagrama…"),
+                                    egui::FontId::proportional(style.size * 0.9),
+                                    style.muted,
+                                );
+                                Some(resp)
+                            }
+                            View::Image(tex, size) => {
+                                let w = size.x.min(width).max(1.0);
+                                let h = size.y * (w / size.x.max(1.0));
+                                let resp = ui
+                                    .add(egui::Image::new((tex.id(), egui::vec2(w, h))).sense(egui::Sense::click()))
+                                    .on_hover_text(iurefficient_ui::lang::pick(
+                                        "Click to edit the diagram",
+                                        "Clic para editar el diagrama",
+                                    ))
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                let pos = i + 1;
+                                resp.widget_info(|| {
+                                    let label = format!("{} {pos}", iurefficient_ui::lang::pick("Diagram", "Diagrama"));
+                                    egui::WidgetInfo::labeled(egui::Role::Button, true, label)
+                                });
+                                if resp.clicked() {
+                                    if let Some(c) = st.blocks.chunks.get_mut(i) {
+                                        c.raw = true;
+                                    }
+                                    st.focus = Some((uid, 0));
+                                }
+                                Some(resp)
+                            }
+                        };
+                        if let Some(rd) = resp_d {
+                            let dh = rd.rect.height();
+                            if let Some(c) = st.blocks.chunks.get_mut(i) {
+                                c.height = dh;
+                            }
+                            if let (Some((a, b)), Some(starts)) = (st.span, starts.as_ref()) {
+                                let s0 = starts.get(i).copied().unwrap_or(0);
+                                if a.max(b) > s0 && a.min(b) <= s0 {
+                                    ui.painter().rect_filled(
+                                        rd.rect,
+                                        0.0,
+                                        ui.visuals().selection.bg_fill.gamma_multiply(0.4),
+                                    );
+                                }
+                            }
+                            if g > 0.0 {
+                                ui.add_space(g);
+                            }
+                            y += dh + g;
+                            if resp.is_none() {
+                                resp = Some(rd);
+                            }
+                            continue;
+                        }
+                    }
+                }
                 // Una tabla: cuadrícula de celdas.
                 if let Some(grid) = st.blocks.chunks.get(i).filter(|c| !c.raw).and_then(|c| table_of(&c.content)) {
                     let uid = st.blocks.chunks.get(i).map_or(0, |c| c.uid);
@@ -722,7 +820,12 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
                 let hint = if only && c.content.is_empty() { hint } else { "" };
                 let (changed, out) = field(ui, fid, &mut c.content, hint, 1, &style, skey);
                 c.height = out.response.response.rect.height();
-                let ch = c.height;
+                let mut ch = c.height;
+                // Un diagrama con error: el código y, debajo, qué falla.
+                if let Some(e) = &diagram_error {
+                    ch += ui.colored_label(ui.visuals().error_fg_color, e.as_str()).rect.height();
+                    c.height = ch;
+                }
                 // Cada bloque con nombre para lectores de pantalla (el anfitrión nombra el que devuelve).
                 let pos = i + 1;
                 out.response.response.widget_info(|| {

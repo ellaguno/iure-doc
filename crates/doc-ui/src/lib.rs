@@ -41,10 +41,12 @@ use iure_doc::edit::{self, Edit};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
 
 mod blocks;
+mod diagrams;
 mod history;
 mod span;
 mod table_ui;
-pub use blocks::show as show_blocks;
+pub use blocks::{show as show_blocks, show_with as show_blocks_with};
+pub use diagrams::{DiagramImage, DiagramRenderer};
 
 /// Colores y letra del editor.
 #[derive(Clone, Debug, PartialEq)]

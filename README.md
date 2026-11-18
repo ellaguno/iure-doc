@@ -8,7 +8,7 @@ El documento de la suite Iurefficient, **100 % en Rust**:
   funciones puras (`edit`) y `chunks` para editores por bloques.
 - **`iure-doc-ui`** (egui 0.37): `DocEditor`, Markdown con formato al teclear. `show` es un solo
   campo (notas cortas); `show_blocks` es el editor por bloques para documentos largos (~1 ms por
-  tecla con 100 páginas), con deshacer de todo el documento, selección que cruza bloques y tablas editables en su lugar (`table`: cuadrícula sin pérdidas para lo que no se toca).
+  tecla con 100 páginas), con deshacer de todo el documento, selección que cruza bloques tablas editables en su lugar (`table`: cuadrícula sin pérdidas para lo que no se toca) y diagramas dibujados en su lugar (`show_blocks_with` con un `DiagramRenderer` de la app: el editor no dibuja, la app sí).
 
 Lo usan IureDesk (notas), IureProject (notas de tareas) e IureEditor 2.0. El plan está en
 [`iuredesk/docs/suite-integracion.md`](https://github.com/ellaguno/iuredesk/blob/main/docs/suite-integracion.md)
@@ -17,7 +17,7 @@ Lo usan IureDesk (notas), IureProject (notas de tareas) e IureEditor 2.0. El pla
 ## Usarlo
 
 ```toml
-iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.3.0" }
+iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.4.0" }
 ```
 
 Para trabajar a la vez en este repositorio y en una app, sin publicar una etiqueta, en la app

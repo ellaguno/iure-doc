@@ -28,6 +28,9 @@
 //!
 //! **Diagramas en su lugar** ([`crate::diagrams`], con [`show_with`]): los bloques que la app sabe
 //! dibujar se ven como imagen; un clic o entrar con las flechas muestra su código.
+//!
+//! **Imágenes en su lugar** ([`crate::images`]): un párrafo que es solo una imagen local se ve como
+//! la imagen (con [`crate::LocalImages`] entre los dibujantes).
 
 use std::hash::{Hash, Hasher};
 
@@ -273,6 +276,9 @@ impl Blocks {
         self.chunks.iter().position(|c| c.uid == uid)
     }
 }
+
+/// Alto más grande con que se ve un diagrama o una imagen (una foto vertical no ocupa páginas).
+const MAX_IMAGE_HEIGHT: f32 = 640.0;
 
 /// Estado del editor entre cuadros.
 #[derive(Clone, Default)]
@@ -662,6 +668,8 @@ pub fn show_with(
                         c.raw = true;
                     } else {
                         let uid = c.uid;
+                        // Una imagen (con su texto alternativo) o un diagrama.
+                        let image_alt = crate::images::image_of(&c.content).map(|(_, alt)| alt);
                         let resp_d = match st.diagrams.get(ui.ctx(), r, &c.content) {
                             View::Failed(e) => {
                                 diagram_error = Some(e);
@@ -680,18 +688,28 @@ pub fn show_with(
                                 Some(resp)
                             }
                             View::Image(tex, size) => {
-                                let w = size.x.min(width).max(1.0);
-                                let h = size.y * (w / size.x.max(1.0));
+                                // Al ancho del editor y, como mucho, de este alto.
+                                let k = (width / size.x.max(1.0)).min(MAX_IMAGE_HEIGHT / size.y.max(1.0)).min(1.0);
+                                let (w, h) = (size.x * k, size.y * k);
+                                let pick = iurefficient_ui::lang::pick;
+                                let hover = if image_alt.is_some() {
+                                    pick("Click to edit the image", "Clic para editar la imagen")
+                                } else {
+                                    pick("Click to edit the diagram", "Clic para editar el diagrama")
+                                };
                                 let resp = ui
                                     .add(egui::Image::new((tex.id(), egui::vec2(w, h))).sense(egui::Sense::click()))
-                                    .on_hover_text(iurefficient_ui::lang::pick(
-                                        "Click to edit the diagram",
-                                        "Clic para editar el diagrama",
-                                    ))
+                                    .on_hover_text(hover)
                                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                                 let pos = i + 1;
                                 resp.widget_info(|| {
-                                    let label = format!("{} {pos}", iurefficient_ui::lang::pick("Diagram", "Diagrama"));
+                                    let label = match &image_alt {
+                                        Some(alt) if !alt.trim().is_empty() => {
+                                            format!("{} {pos}: {alt}", pick("Image", "Imagen"))
+                                        }
+                                        Some(_) => format!("{} {pos}", pick("Image", "Imagen")),
+                                        None => format!("{} {pos}", pick("Diagram", "Diagrama")),
+                                    };
                                     egui::WidgetInfo::labeled(egui::Role::Button, true, label)
                                 });
                                 if resp.clicked() {

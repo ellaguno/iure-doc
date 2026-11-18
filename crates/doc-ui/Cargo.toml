@@ -12,10 +12,13 @@ egui.workspace = true
 iure-doc.workspace = true
 iurefficient-ui.workspace = true
 pulldown-cmark.workspace = true
+image.workspace = true
 
 [dev-dependencies]
 egui_kittest.workspace = true
+image.workspace = true
 proptest.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

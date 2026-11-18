@@ -360,3 +360,37 @@ fn a_diagram_with_an_error_shows_the_code_and_what_fails() {
     assert!(wait_for(&mut h, "La línea 2 no se entiende."), "el error en palabras");
     assert!(h.query_by_label("Diagrama 1").is_none());
 }
+
+// --- Imágenes en su lugar ---
+
+fn images_harness(text: &str, base: std::path::PathBuf) -> Harness<'static, State> {
+    let r: std::sync::Arc<dyn iure_doc_ui::DiagramRenderer> = std::sync::Arc::new(iure_doc_ui::Renderers(vec![
+        std::sync::Arc::new(FakeDiagrams),
+        std::sync::Arc::new(iure_doc_ui::LocalImages::new(Some(base))),
+    ]));
+    Harness::builder().with_size(egui::vec2(600.0, 500.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let out = iure_doc_ui::show_blocks_with(ui, Id::unique("img"), &mut st.text, "Escribe", Some(r.clone()));
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        State { text: text.to_string() },
+    )
+}
+
+#[test]
+fn local_images_are_shown_in_place_and_remote_ones_are_explained() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("img")).unwrap();
+    image::RgbaImage::from_pixel(40, 20, image::Rgba([0, 90, 180, 255]))
+        .save(dir.path().join("img/sello.png"))
+        .unwrap();
+    let doc = "Antes\n\n![Sello del despacho](img/sello.png)\n\n![Logo](https://x.mx/logo.png)\n\n```mermaid\nA\n```\n";
+    let mut h = images_harness(doc, dir.path().to_path_buf());
+    assert!(wait_for(&mut h, "Imagen 2: Sello del despacho"), "la imagen con su texto alternativo");
+    assert!(wait_for(&mut h, "Diagrama 4"), "los diagramas siguen con el otro dibujante");
+    assert!(wait_for(&mut h, "Las imágenes de internet no se descargan aquí."));
+    assert_eq!(h.state().text, doc);
+    h.get_by_label("Imagen 2: Sello del despacho").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Imagen 2: Sello del despacho").is_none(), "se edita el Markdown");
+}

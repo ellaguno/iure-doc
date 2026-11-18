@@ -22,7 +22,7 @@ Estado al 2026-11-18 (`iure-doc` v0.9.0). ✅ hecho · ◐ parcial · ❌ falta 
 | Atajos | ◐ | Ctrl+B/I, Ctrl+Mayús+X/K, Ctrl+Mayús+7/8/9, Ctrl+Alt+1–3. **Faltan en la paleta de comandos** y Ctrl+U (no hay subrayado en Markdown) |
 | Buscar y reemplazar | ◐ | En el documento: Ctrl+F / Ctrl+H, «n de m», Intro/Mayús+Intro/F3, «Aa», `\n` y `\t`, reemplazar uno o todo (un paso de deshacer), resaltado y desplazamiento, Esc deja la coincidencia seleccionada. **Falta**: buscar en los archivos de la carpeta (IureEditor 2.0) y expresiones regulares |
 | IME y acentos | ◐ | Los de egui (acentos con tecla muerta funcionan); **sin probar con IME de chino/japonés** |
-| Guardado automático y recuperación de borradores | ◐ | IureDesk guarda solo; IureEditor 2.0 **aún no** (TipTap: autoguardado y recuperación tras cierre) |
+| Guardado automático y recuperación de borradores | ✅ | IureDesk guarda solo; IureEditor 2.0 escribe borradores 2,5 s después del último cambio y ofrece recuperarlos tras un cierre inesperado (como la versión Tauri) |
 | Corrector ortográfico | ◐ | Hunspell del sistema (es + en), sugerencias, diccionario personal; **sin diccionarios en Windows/macOS** |
 | Fidelidad al guardar | ✅ | Corpus (golden de IureEditor, plantillas, README, CHANGELOG, casos difíciles, CRLF): byte a byte en el modelo y en el editor dibujado |
 | Rendimiento | ✅ | 100 páginas + 20 diagramas + corrector: < 2 ms por tecla (meta < 8 ms) |

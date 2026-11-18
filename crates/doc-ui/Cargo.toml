@@ -15,6 +15,7 @@ pulldown-cmark.workspace = true
 image.workspace = true
 arboard.workspace = true
 spellbook.workspace = true
+syntect.workspace = true
 
 [dev-dependencies]
 egui_kittest.workspace = true

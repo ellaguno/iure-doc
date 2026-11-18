@@ -43,6 +43,7 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
 mod blocks;
 mod diagrams;
 mod find;
+mod highlight;
 mod history;
 mod images;
 mod paste;
@@ -51,6 +52,7 @@ pub mod spell;
 mod table_ui;
 pub use blocks::{Hooks, show as show_blocks, show_hooks as show_blocks_hooks, show_with as show_blocks_with};
 pub use diagrams::{DiagramImage, DiagramRenderer};
+pub use highlight::wait_ready as wait_highlighting;
 pub use images::{LocalImages, Renderers};
 pub use paste::{PasteSource, SystemClipboard};
 pub use spell::Speller;
@@ -71,6 +73,8 @@ pub struct EditorStyle {
     pub body_family: FontFamily,
     /// Subrayado de las palabras mal escritas.
     pub error: Color32,
+    /// Tema oscuro (los colores del código cambian).
+    pub dark: bool,
 }
 
 impl EditorStyle {
@@ -88,6 +92,7 @@ impl EditorStyle {
             bold_family: bold.family,
             body_family: body.family,
             error: ui.visuals().error_fg_color,
+            dark: ui.visuals().dark_mode,
         }
     }
 }
@@ -113,6 +118,8 @@ struct Fmt {
     hidden: bool,
     /// Palabra mal escrita (subrayada).
     misspelled: bool,
+    /// Clase de resaltado de sintaxis en un bloque de código ([`highlight`]; 0: ninguna).
+    syn: u8,
 }
 
 fn inline_marker(x: &mut Fmt) {
@@ -133,9 +140,18 @@ fn formats(text: &str) -> Vec<Fmt> {
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_MATH
         | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
+    // Lenguaje del bloque de código en el que se está (para el resaltado de sintaxis).
+    let mut code_lang: Option<String> = None;
     for (ev, r) in Parser::new_ext(text, opts).into_offset_iter() {
         let slice = text.get(r.clone()).unwrap_or("");
         match ev {
+            Event::Text(_) if code_lang.is_some() => {
+                let lang = code_lang.as_deref().unwrap_or("");
+                for (lr, class) in highlight::spans(lang, slice) {
+                    set(r.start + lr.start..r.start + lr.end, &|x| x.syn = class);
+                }
+            }
+            Event::End(pulldown_cmark::TagEnd::CodeBlock) => code_lang = None,
             Event::Start(Tag::Heading { level, .. }) => {
                 let n = match level {
                     HeadingLevel::H1 => 1,
@@ -197,7 +213,16 @@ fn formats(text: &str) -> Vec<Fmt> {
                     set(r.start + close..r.end, &inline_marker);
                 }
             }
-            Event::Start(Tag::CodeBlock(_)) => {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                code_lang = match kind {
+                    pulldown_cmark::CodeBlockKind::Fenced(info) => Some(
+                        info.split(|c: char| c.is_whitespace() || c == ',' || c == '{')
+                            .next()
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                    pulldown_cmark::CodeBlockKind::Indented => None,
+                };
                 set(r.clone(), &|x| x.code = true);
                 // Las cercas.
                 let first = slice.find('\n').unwrap_or(slice.len());
@@ -256,6 +281,34 @@ fn formats(text: &str) -> Vec<Fmt> {
     f
 }
 
+/// Color de una clase de sintaxis, con el tema: palabras clave en el acento, comentarios tenues.
+fn syntax_color(class: u8, s: &EditorStyle) -> Color32 {
+    let (string, number, function, ty) = if s.dark {
+        (
+            Color32::from_rgb(0x8f, 0xd1, 0x8f),
+            Color32::from_rgb(0xf0, 0xa3, 0x5e),
+            Color32::from_rgb(0xc3, 0x9e, 0xf0),
+            Color32::from_rgb(0x63, 0xc5, 0xda),
+        )
+    } else {
+        (
+            Color32::from_rgb(0x0a, 0x7d, 0x33),
+            Color32::from_rgb(0xb3, 0x59, 0x00),
+            Color32::from_rgb(0x6f, 0x42, 0xc1),
+            Color32::from_rgb(0x0b, 0x6e, 0x99),
+        )
+    };
+    match class {
+        highlight::COMMENT => s.muted,
+        highlight::STRING => string,
+        highlight::NUMBER => number,
+        highlight::KEYWORD => s.accent,
+        highlight::FUNCTION => function,
+        highlight::TYPE => ty,
+        _ => s.text,
+    }
+}
+
 /// Factor de tamaño de un título.
 fn heading_scale(level: u8) -> f32 {
     match level {
@@ -297,10 +350,13 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
     if fmt.marker && fmt.bullet {
         color = s.accent;
     }
+    if fmt.code && !fmt.marker && fmt.syn != 0 {
+        color = syntax_color(fmt.syn, s);
+    }
     TextFormat {
         font_id: FontId::new(size, family),
         color,
-        italics: fmt.italic || (fmt.quote && !fmt.marker),
+        italics: fmt.italic || (fmt.quote && !fmt.marker) || (fmt.code && fmt.syn == highlight::COMMENT),
         background: if fmt.code && !fmt.marker { s.code_bg } else { Color32::TRANSPARENT },
         strikethrough: if fmt.strike && !fmt.marker { Stroke::new(1.0, s.text) } else { Stroke::NONE },
         underline: if fmt.misspelled && !fmt.marker {
@@ -517,6 +573,10 @@ pub(crate) fn field(
         None
     };
     let spell_gen = spell.map(Speller::generation);
+    // Las gramáticas de código se cargan en otro hilo: hasta que lleguen, otro cuadro en un rato.
+    if !highlight::ready() && (text.contains("```") || text.contains("~~~")) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    }
     // Caché del dibujo: si no cambian el texto, la línea del cursor, el ancho ni el estilo (lo
     // normal mientras el cursor parpadea o se desplaza la vista), no se vuelve a calcular.
     let cache_id = id.with("galley");
@@ -529,6 +589,7 @@ pub(crate) fn field(
         style_key.hash(&mut h);
         spell_gen.hash(&mut h);
         typing.hash(&mut h);
+        highlight::ready().hash(&mut h);
         let key = h.finish();
         if let Some((k, g)) = ui.data(|d| d.get_temp::<(u64, Arc<egui::Galley>)>(cache_id))
             && k == key
@@ -674,6 +735,30 @@ mod tests {
     }
 
     #[test]
+    fn code_blocks_are_highlighted_with_the_theme() {
+        assert!(highlight::wait_ready(std::time::Duration::from_secs(20)));
+        let t = "```rust\n// nota\nfn main() { \"hola\" }\n```\n\n`fn` en línea";
+        assert_eq!(fmt_at(t, "fn main").syn, highlight::KEYWORD);
+        assert_eq!(fmt_at(t, "nota").syn, highlight::COMMENT);
+        assert_eq!(fmt_at(t, "hola").syn, highlight::STRING);
+        assert_eq!(fmt_at(t, "```rust").syn, 0, "la cerca, sin color");
+        assert_eq!(fmt_at(t, "fn` en").syn, 0, "el código en línea no se resalta");
+        let s = EditorStyle {
+            text: Color32::BLACK,
+            muted: Color32::GRAY,
+            accent: Color32::BLUE,
+            code_bg: Color32::LIGHT_GRAY,
+            size: 14.0,
+            bold_family: FontFamily::Proportional,
+            body_family: FontFamily::Proportional,
+            error: Color32::RED,
+            dark: false,
+        };
+        assert_eq!(text_format(fmt_at(t, "fn main"), &s).color, Color32::BLUE, "palabras clave en el acento");
+        assert!(text_format(fmt_at(t, "nota"), &s).italics, "comentarios en cursiva");
+    }
+
+    #[test]
     fn inline_markers_hide_outside_the_cursor_line() {
         let s = EditorStyle {
             text: Color32::BLACK,
@@ -684,6 +769,7 @@ mod tests {
             bold_family: FontFamily::Proportional,
             body_family: FontFamily::Proportional,
             error: Color32::RED,
+            dark: false,
         };
         let t = "uno **dos**\ntres **cuatro**\n- lista";
         let hidden = |job: &LayoutJob, needle: &str| {
@@ -723,6 +809,7 @@ mod tests {
             bold_family: FontFamily::Proportional,
             body_family: FontFamily::Proportional,
             error: Color32::RED,
+            dark: false,
         };
         let t = "hola holla `holla` mundo";
         let red = |job: &LayoutJob, at: usize| {
@@ -748,6 +835,7 @@ mod tests {
             bold_family: FontFamily::Proportional,
             body_family: FontFamily::Proportional,
             error: Color32::RED,
+            dark: false,
         };
         for t in ["", "hola", "# a\n**b** ñú `c`\n- [x] d", "```\ncódigo\n```"] {
             let job = layout_job(t, &s, 300.0, None);
@@ -777,7 +865,11 @@ mod perf {
             bold_family: FontFamily::Proportional,
             body_family: FontFamily::Proportional,
             error: Color32::RED,
+            dark: false,
         };
+        // Con las gramáticas ya cargadas (se cargan una vez, en otro hilo).
+        let _ = highlight::wait_ready(std::time::Duration::from_secs(20));
+        let _ = formats(page);
         let tf = std::time::Instant::now();
         let _f = formats(&text);
         eprintln!("solo formats: {:.1} ms", tf.elapsed().as_secs_f64() * 1000.0);
@@ -795,6 +887,8 @@ mod perf {
             eprintln!("glifos de egui: {glyph_ms:.1} ms ({} filas)", g.rows.len());
         });
         out.textures_delta.clear();
-        assert!(ms < 2_000.0, "{ms} ms");
+        // Holgado: en depuración el resaltado (fancy-regex) es mucho más lento que optimizado.
+        let limit = if cfg!(debug_assertions) { 30_000.0 } else { 2_000.0 };
+        assert!(ms < limit, "{ms} ms");
     }
 }

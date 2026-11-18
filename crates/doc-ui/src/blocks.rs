@@ -42,6 +42,9 @@
 //! **Buscar y reemplazar** ([`crate::find`]): Ctrl+F / Ctrl+H abren una barra arriba del editor;
 //! las coincidencias se resaltan en los bloques visibles (los diagramas y tablas se tiñen) y el
 //! editor se desplaza hasta la actual; Esc la deja seleccionada en el texto.
+//!
+//! **Resaltado de sintaxis** ([`crate::highlight`]): los bloques de código con lenguaje se colorean
+//! con los colores del tema.
 
 use std::hash::{Hash, Hasher};
 
@@ -1518,7 +1521,14 @@ mod perf {
             t.elapsed().as_secs_f64() * 1000.0
         };
         let first = frame(&mut text);
+        let _ = crate::highlight::wait_ready(std::time::Duration::from_secs(20));
+        frame(&mut text);
+        frame(&mut text);
+        let before = crate::highlight::CALLS.with(std::cell::Cell::get);
         let steady = frame(&mut text);
+        // Un cuadro sin cambios no vuelve a resaltar nada (la caché del dibujo por bloque).
+        let again = crate::highlight::CALLS.with(std::cell::Cell::get) - before;
+        assert_eq!(again, 0, "un cuadro estable no resalta");
         // Una tecla: el bloque 10 cambia (como lo haría su campo) y se rehace.
         let t = std::time::Instant::now();
         let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
@@ -1585,6 +1595,7 @@ mod perf {
             out.textures_delta.clear();
             t.elapsed().as_secs_f64() * 1000.0
         };
+        let _ = crate::highlight::wait_ready(std::time::Duration::from_secs(20));
         // Los diagramas y los diccionarios llegan de otros hilos: unos cuadros para que lleguen.
         for _ in 0..20 {
             frame(&mut text);

@@ -374,17 +374,57 @@ pub struct Output {
     pub response: egui::Response,
 }
 
+/// Consume un atajo por su tecla lógica o física (Ctrl+Mayús+7 en un teclado donde Mayús+7 es
+/// «/»), con exactamente esos modificadores.
+pub(crate) fn take_shortcut(i: &mut egui::InputState, mods: Modifiers, key: Key) -> bool {
+    let pos = i.events.iter().position(|e| {
+        matches!(e, egui::Event::Key { key: k, physical_key: pk, pressed: true, modifiers: m, .. }
+            if (*k == key || *pk == Some(key)) && m.command == mods.command && m.shift == mods.shift && m.alt == mods.alt)
+    });
+    match pos {
+        Some(p) => {
+            i.events.remove(p);
+            true
+        }
+        None => false,
+    }
+}
+
 /// La tecla del editor que toca (antes de que la vea el `TextEdit`).
 fn editor_key(ui: &Ui, text: &str, sel: (usize, usize)) -> Option<Edit> {
     let (a, b) = sel;
     let cursor = a.max(b);
     let collapsed = a == b;
     ui.input_mut(|i| {
+        // Tres Intro al final de un bloque de código: fuera del bloque.
+        if collapsed
+            && let Some(e) = edit::code_exit(text, cursor)
+            && i.consume_key(Modifiers::NONE, Key::Enter)
+        {
+            return Some(e);
+        }
         if collapsed
             && let Some(e) = edit::on_enter(text, cursor)
             && i.consume_key(Modifiers::NONE, Key::Enter)
         {
             return Some(e);
+        }
+        // Listas (Ctrl+Mayús+7/8/9) y títulos (Ctrl+Alt+1–3), como en TipTap y Google Docs.
+        let shift_cmd = Modifiers { shift: true, ..Modifiers::COMMAND };
+        let alt_cmd = Modifiers { alt: true, ..Modifiers::COMMAND };
+        for (key, kind) in [
+            (Key::Num7, edit::LineKind::Ordered),
+            (Key::Num8, edit::LineKind::Bullet),
+            (Key::Num9, edit::LineKind::Task),
+        ] {
+            if take_shortcut(i, shift_cmd, key) {
+                return edit::set_line_kind(text, a, b, kind);
+            }
+        }
+        for (key, level) in [(Key::Num1, 1u8), (Key::Num2, 2), (Key::Num3, 3)] {
+            if take_shortcut(i, alt_cmd, key) {
+                return edit::set_line_kind(text, a, b, edit::LineKind::Heading(level));
+            }
         }
         // Mayús+Tab primero: `consume_key` sin modificadores también acepta Mayús.
         if let Some(e) = edit::indent(text, cursor, true)
@@ -593,6 +633,43 @@ mod tests {
         assert!(fmt_at(t, "- [ ]").bullet && fmt_at(t, "[ ] tarea").bullet);
         assert!(fmt_at(t, "cita").quote && fmt_at(t, "> cita").marker);
         assert!(!fmt_at(t, "Texto").bold);
+    }
+
+    /// S1.22: cada regla de entrada de §4.7 da su estilo al teclearla (Markdown en vivo: lo
+    /// tecleado ya es el formato; borrar la marca lo deshace).
+    #[test]
+    fn input_rules_style_the_text() {
+        let f = |t: &str, needle: &str| fmt_at(t, needle);
+        for (level, t) in (1u8..=6).map(|n| (n, format!("{} T", "#".repeat(usize::from(n))))) {
+            assert_eq!(f(&t, "T").heading, level, "{t}");
+        }
+        for t in ["- a", "* a", "+ a", "1. a", "1) a", "7. a"] {
+            assert!(f(t, &t[..1]).bullet, "viñeta o número: {t}");
+        }
+        assert!(f("- [ ] a", "[ ]").bullet && f("- [x] a", "[x]").bullet, "tareas");
+        assert!(f("> cita", "cita").quote);
+        assert!(f("> [!NOTE] Aviso\n> cuerpo", "cuerpo").quote, "aviso");
+        assert!(f("```rust\nfn f() {}\n```", "fn f").code, "bloque de código");
+        assert!(f("a\n\n---\n\nb", "---").marker, "separador");
+        for t in ["**n**", "__n__"] {
+            assert!(f(t, "n").bold, "negrita: {t}");
+        }
+        for t in ["*c*", "_c_"] {
+            assert!(f(t, "c").italic, "cursiva: {t}");
+        }
+        assert!(!f("snake_case_name", "case").italic, "sin falsos positivos en snake_case");
+        // En CommonMark `2*3*4` sí es cursiva (el asterisco vale dentro de la palabra), igual que
+        // en cualquier visor: el editor no lo contradice. Con espacios no lo es.
+        assert!(f("2*3*4", "3").italic);
+        assert!(!f("2 * 3 * 4", "3").italic, "con espacios, multiplicación");
+        assert!(f("~~t~~", "t").strike);
+        assert!(f("`x`", "x").code);
+        let link = "[texto](https://x.mx)";
+        assert!(f(link, "texto").link && f(link, "](https").marker);
+        assert!(f("| a | b |\n|---|---|\n| 1 | 2 |", "|---").marker, "tabla");
+        // Nada se convierte dentro de código.
+        assert!(!f("`**no**`", "no").bold && !f("```\n# no\n```", "no").bold);
+        assert_eq!(f("```\n# no\n```", "no").heading, 0);
     }
 
     #[test]

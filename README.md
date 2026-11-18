@@ -17,7 +17,7 @@ Lo usan IureDesk (notas), IureProject (notas de tareas) e IureEditor 2.0. El pla
 ## Usarlo
 
 ```toml
-iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.7.0" }
+iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.8.0" }
 ```
 
 Para trabajar a la vez en este repositorio y en una app, sin publicar una etiqueta, en la app
@@ -29,6 +29,15 @@ Para trabajar a la vez en este repositorio y en una app, sin publicar una etique
 iure-doc = { path = "../iure-doc/crates/doc" }
 iure-doc-ui = { path = "../iure-doc/crates/doc-ui" }
 ```
+
+## Aceptación (S1.22)
+
+- `tests/corpus/`: documentos reales (golden de IureEditor, plantillas, README, CHANGELOG, casos
+  difíciles, CRLF) idénticos al abrir y guardar, en el modelo y en el editor dibujado
+  (`IURE_DOC_CORPUS=/carpeta` agrega otros sin copiarlos).
+- `tests/rules.rs` y `input_rules_style_the_text`: cada regla de entrada y comportamiento.
+- `hundred_pages_with_diagrams` (en `--release`): 100 páginas + 20 diagramas + corrector.
+- [`docs/paridad-tiptap.md`](docs/paridad-tiptap.md): paridad con IureEditor (TipTap), para firmar.
 
 ## Puerta de calidad
 

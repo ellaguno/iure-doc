@@ -1,0 +1,664 @@
+# Changelog
+
+Todas las versiones notables de iureditor. El cuerpo de cada release en GitHub
+se genera automáticamente a partir de la sección correspondiente al tag
+(`.github/workflows/release.yml`), así que para publicar unas notas basta con
+añadir aquí la sección `## vX.Y.Z` antes de empujar el tag.
+
+## v1.19.2 — 2026-11-18
+
+Incluye también lo de la v1.19.1, que no llegó a publicarse.
+
+### Cambiado
+- **Mapas mentales compartidos con IureDesk.** Al cambiar la forma o la
+  distribución de un mapa mental, IureEditor conserva las palabras del metadato
+  que no son suyas (como `root-l` o `palette-warm`, que pone IureDesk), así que
+  editar el mapa en una app ya no borra lo que se eligió en la otra.
+- Un mapa con distribución radial elegida en IureDesk (`layout-radial`) se abre
+  como radial en IureEditor, en lugar de pasar a árbol.
+
+## v1.19.1 — 2026-11-10
+
+### Cambiado
+- **macOS: la app viene firmada y notarizada por Apple.** El `.dmg` y las
+  actualizaciones llevan firma Developer ID y el ticket de
+  notarización, así que macOS la abre sin el aviso de «desarrollador no
+  identificado» ni el paso por Ajustes › Privacidad y seguridad.
+
+## v1.19.0 — 2026-11-06
+
+### Añadido
+- **Respuestas en streaming.** En el panel del asistente la respuesta aparece
+  mientras se escribe, y en el asistente de diagramas se ve cuántas líneas lleva.
+  «Cancelar» ahora deja de recibir la respuesta en curso (antes sólo dejaba de
+  esperarla); la pregunta vuelve al campo para reintentarla.
+
+### Cambiado
+- El chat usa el módulo `chat` de iurefficient-connect v0.9.0: si la conexión se
+  corta a media respuesta se retoma donde iba, y un fallo de la IA de la
+  instancia se avisa en segundos en vez de esperar a que se agote el tiempo.
+
+## v1.18.0 — 2026-11-06
+
+### Añadido
+- **Análisis del documento** en el asistente. Bajo la pregunta se elige qué la
+  acompaña: nada, la selección o el documento completo. El botón de la lupa
+  ofrece análisis listos: revisar inconsistencias y errores, resumen y puntos
+  clave, qué le falta y, en un documento de un proyecto, contrastarlo con el
+  expediente. El documento se manda como texto (sin imágenes incrustadas), hasta
+  100 000 caracteres; más largo, se pide seleccionar la parte. Cada envío del
+  documento abre una conversación nueva en la instancia para no pagarlo de nuevo
+  en cada pregunta siguiente.
+
+## v1.17.0 — 2026-11-06
+
+### Añadido
+- **Asistente** en el panel lateral (icono de destellos, Ctrl+Shift+J): preguntas
+  a la IA de Iurefficient para el documento. Si está guardado en un proyecto, por
+  omisión pregunta en el chat del proyecto, que busca en sus documentos y cita
+  las fuentes; si no, en el chat general. Puede llevar el texto seleccionado.
+  **Insertar** pone la respuesta tras el cursor y **Reemplazar** la pone en lugar
+  de la selección, sin las marcas de cita. La conversación se conserva por
+  documento hasta empezar otra.
+
+### Corregido
+- El asistente de diagramas mandaba como contexto todo el historial de chat del
+  usuario en la instancia; ahora cada edición del diagrama usa su propia
+  conversación, que se borra al cerrar el editor.
+
+## v1.16.0 — 2026-11-06
+
+### Añadido
+- **Asistente de diagramas.** En el editor de un diagrama, el botón «Asistente»
+  pide a la IA de Iurefficient (con la cuenta conectada) que dibuje un diagrama a
+  partir de una descripción o que cambie el actual («agrega una rama de
+  desechamiento»). El código se revisa antes de mostrarlo y, si no compila, se le
+  pide al asistente que lo corrija; «Restaurar código anterior» deshace la
+  generación. Cada petición gasta cuota de IA del plan.
+
+### Corregido
+- El primer clic en los botones del editor de diagramas a veces sólo
+  seleccionaba el bloque, y lo que se tecleaba después iba al documento.
+
+## v1.15.1 — 2026-11-06
+
+### Corregido
+- Elegir una plantilla en el editor de diagramas reemplaza el código en vez de
+  sumarse al anterior (dos diagramas en un bloque daban error de mermaid). Si ya
+  editaste el código, pregunta antes de reemplazarlo.
+
+## v1.15.0 — 2026-11-06
+
+### Añadido
+- **Más plantillas de diagramas.** El menú «Insertar plantilla» del editor de
+  diagramas suma cuadrantes, mapa mental, línea de tiempo, recorrido de usuario,
+  gráfico de Git, gráfica XY (barras y líneas), Sankey, Kanban, diagrama de
+  bloques, requisitos, paquete, radar, mapa de árbol y contexto C4.
+
+### Corregido
+- Al terminar de editar un diagrama mermaid, el cuadro quedaba en blanco hasta
+  desplazarse fuera y volver; ahora el diagrama se ve en cuanto se cierra el
+  editor.
+
+## v1.14.0 — 2026-11-02
+
+### Añadido
+- **Mapas mentales.** Un callout `> [!MINDMAP] Centro` con una lista con sangría
+  se dibuja como mapa mental (mermaid) junto a la lista, a la derecha o debajo, y
+  se actualiza mientras escribes. Negritas y cursivas pasan a los nodos. El mapa
+  se dibuja como árbol (ramas alternadas a izquierda y derecha, en el orden de la
+  lista) y no se reacomoda entero al añadir o quitar ramas.
+  - El botón de mapa mental de la barra convierte la lista del cursor en mapa (el
+    párrafo previo es el centro) y lo deshace; también `/mapa`.
+  - Forma de los nodos en la cabecera (cuadrado, redondeado, círculo, nube,
+    explosión o hexágono), guardada como `> [!MINDMAP|bang]`.
+  - El mapa se edita: un clic en un nodo lleva el cursor a su elemento de la
+    lista y la barra bajo el nodo añade ramas hijas o hermanas o las elimina. Los
+    nodos con `[[enlace]]` abren la nota con Ctrl+clic.
+  - **Mapa de enlaces** (`/enlaces`): mapa con la nota al centro, sus enlaces,
+    los enlaces de esas notas y las notas que la enlazan, sacado del índice de la
+    carpeta. Se marca como `> [!MINDMAP|links]` y su cabecera ofrece regenerarlo
+    con los enlaces actuales.
+  - Tres vistas, guardadas en el documento: lista con el mapa debajo (por
+    omisión), lista y mapa lado a lado (`|right`) o sólo el mapa (`|map`; la lista
+    se oculta y se edita desde el mapa). El PDF, DOCX y HTML exportados lo
+    muestran tal como se ve. En Obsidian o GitHub se ve como un callout con su
+    lista.
+
+## v1.13.0 — 2026-10-21
+
+### Añadido
+- **Enlace `iureditor://edit?action=…&path=…`** para editar por voz sin tomar el
+  foco: `delete-word` borra la palabra antes del cursor, `delete-line` el renglón
+  (o el elemento de la lista) y `undo` deshace. IureVoz lo usa con «borra la
+  palabra», «borra la línea» y «deshaz».
+
+## v1.12.1 — 2026-10-21
+
+### Corregido
+- **Dictado por `iureditor://insert`: listas y párrafos.** Un salto de línea dentro
+  de una lista crea un elemento nuevo (antes un párrafo dentro del mismo), un
+  renglón sin marca sale de la lista, «- » solo empieza una viñeta para el texto
+  que llega después, y no se apilan párrafos vacíos.
+
+## v1.12.0 — 2026-10-21
+
+### Añadido
+- **Enlace `iureditor://insert?text=…&path=…`.** Con la app abierta, inserta el
+  texto en el cursor del documento indicado (o del activo) sin mostrar ni enfocar
+  la ventana. Cada salto de línea abre un párrafo, y un renglón que empieza como
+  Markdown (`#`, `-`, `1.`, `>`) se convierte en su bloque. Lo usa IureVoz para
+  dictar: en GNOME (Wayland) otra app no puede darle el foco al editor, y el
+  dictado tecleado caía en la ventana que estuviera al frente.
+
+### Corregido
+- **Texto seleccionado ilegible en modo oscuro.** La selección del editor ahora
+  contrasta con el fondo oscuro.
+
+## v1.11.2 — 2026-10-07
+
+### Corregido
+- **Abrir la ayuda pedía «Guardar como».** Al abrir un documento, sus imágenes
+  incrustadas (`data:`) se trataban como si se acabaran de pegar y se intentaban
+  guardar en `assets/`, lo que exige guardar antes el documento. Por eso la
+  ayuda (F1) pedía guardarse como `document.md`, y abrir un `.md` con imágenes
+  incrustadas creaba archivos en `assets/` y lo dejaba como modificado. Ahora
+  sólo se guardan en `assets/` las imágenes que pegas o sueltas.
+
+## v1.11.1 — 2026-10-07
+
+### Cambiado
+- **La búsqueda en archivos vive dentro de «Archivos».** Ya no tiene pestaña
+  propia: se abre con la lupa del encabezado de Archivos (o `Ctrl+Shift+F`) y
+  se vuelve al árbol con la flecha ← o Esc. El panel lateral queda con cuatro
+  pestañas: Archivos, Esquema, Enlaces e Iurefficient.
+- En el menú Edición, «Buscar y reemplazar…» se divide en **Buscar…**
+  (`Ctrl+F`) y **Reemplazar…** (`Ctrl+H`).
+
+### Añadido
+- **Atajos nuevos:** `Ctrl+H` abre la barra de búsqueda con el reemplazo a la
+  vista (si ya hay un término, el cursor va directo al campo de reemplazo);
+  `Ctrl+Shift+N` muestra u oculta los números de línea; `F1` abre la ayuda.
+- **Ayuda al día** (en español e inglés): nueva sección «Enlaces entre notas»
+  —qué es la bóveda, cómo crear y editar `[[enlaces]]`, el panel Enlaces,
+  renombrar sin romper enlaces, Ir a nota y la paleta de comandos—, además del
+  panel lateral, «Guardar PDF» y la tabla de atajos completa.
+
+## v1.11.0 — 2026-10-07
+
+### Añadido
+- **Enlaces entre notas (wikilinks).** `[[Nota]]`, `[[Nota#Sección]]`,
+  `[[Nota|alias]]` e incrustaciones `![[…]]`, con la misma sintaxis que
+  Obsidian. Al escribir `[[` aparece el autocompletado de notas (y de
+  secciones tras `#`); escribir `]]` convierte el texto en enlace. Un clic abre
+  la nota y, si no existe, la crea. Los enlaces a notas inexistentes se ven
+  punteados. Retroceso justo detrás de un enlace lo devuelve a texto editable.
+  El `.md` se guarda tal cual, también dentro de tablas.
+- **Bóveda.** La carpeta abierta con «Abrir carpeta…» (o marcada con «Usar
+  como bóveda» en el menú contextual del panel de archivos), la carpeta con
+  `.obsidian/` más cercana —las bóvedas de Obsidian funcionan tal cual— o, si
+  no hay ninguna, la del documento. Se indexa en segundo plano y se pone al día
+  al volver a la ventana y con cada guardado.
+- **Panel «Enlaces»** (`Ctrl+Shift+K`): enlaces entrantes, salientes y
+  menciones sin enlazar de la nota activa; un clic abre la nota en el enlace.
+- **Renombrar archivos** desde el panel de archivos (clic derecho). Si otras
+  notas enlazan al archivo, ofrece actualizar sus wikilinks y enlaces markdown
+  `[texto](nota.md)`, en disco y en las pestañas abiertas (sin perder el
+  deshacer ni los cambios sin guardar).
+- **Ir a nota** (`Ctrl+K`): selector rápido con búsqueda difusa (tolera letras
+  saltadas y acentos) entre las notas de la bóveda y los recientes; si no
+  existe, la crea.
+- **Paleta de comandos** (`Ctrl+Shift+P`, o `>` en el selector): todas las
+  acciones de los menús.
+- **Guardar PDF directo.** La vista previa de impresión tiene un botón
+  «Guardar PDF» que abre un diálogo de guardado normal (con
+  `<carpeta del .md>/<nombre>.pdf` prellenado) y escribe el archivo sin pasar
+  por el diálogo de impresión del sistema. «Imprimir…» queda como acción
+  secundaria.
+
+## v1.10.0 — 2026-10-06
+
+### Añadido
+- **Barra de tabla.** Con el cursor dentro de una tabla aparece una barra
+  contextual bajo la barra de herramientas: insertar fila arriba/abajo y
+  columna a la izquierda/derecha, eliminar fila o columna, alinear la columna
+  (izquierda, centro, derecha — se guarda como `:---:` en el markdown),
+  activar o quitar la fila de encabezado y eliminar la tabla. El botón de
+  tabla ahora abre un selector de tamaño (hasta 8 × 6) en vez de insertar
+  siempre 3 × 3.
+- **Pegar imágenes desde más sitios.** Un archivo de imagen copiado en el
+  gestor de archivos se pega como imagen (se copia a `assets/`), y el HTML
+  pegado desde un navegador o un correo con imágenes incrustadas (`data:`)
+  las conserva y las guarda en `assets/` (antes desaparecían en silencio).
+
+### Corregido
+- **Las capturas pegadas volvían a abrirse en blanco (Linux).** Al pegar una
+  captura, la webview insertaba por su cuenta una imagen con una URL `blob:`
+  que sólo vale mientras la ventana está abierta; se guardaba tal cual en el
+  markdown y al reabrir no se veía nada. Además la selección saltaba y la
+  copia buena acababa en otro sitio del documento (a veces duplicada). Ahora
+  la captura se guarda en `assets/` y se inserta donde está el cursor, una
+  sola vez, y el cursor queda después de la imagen (antes la imagen quedaba
+  seleccionada y lo siguiente que se escribía o pegaba la sustituía).
+- **Listas de viñetas dentro de una celda de tabla.** Al cerrar y abrir el
+  documento se aplanaban a una sola línea («- uno - dos»). Ahora se conservan
+  como lista (viajan en la celda como HTML embebido, que GitHub también
+  muestra como lista); los saltos de línea y los párrafos de una celda se
+  guardan como `<br>` en vez de perderse.
+- **Listas que se partían al reabrir.** Un ítem con dos párrafos, un bloque
+  de código dentro de un ítem o un ítem vacío rompían la lista en dos (y las
+  numeradas volvían a empezar en 1); las subtareas de una lista de tareas
+  perdían el anidamiento. El markdown de las listas sale ahora limpio
+  (`- texto`, sublistas sangradas al ancho del marcador) en lugar de
+  `-   texto` con líneas de espacios entre ítems.
+- **Tablas.** Una tabla de una sola columna ganaba una fila `---` en cada
+  recarga; un `\|` dentro de una celda la partía en dos; las celdas combinadas
+  desplazaban las columnas al guardar; y las filas cortas no se rellenaban.
+- Una imagen sola en su línea ya no deja un párrafo vacío encima al abrir el
+  archivo. Las listas dentro de una cita (`> - uno`) o de una admonición se
+  muestran como listas.
+- El menú flotante de formato ya no aparece sobre una imagen o un diagrama
+  seleccionados.
+- **Diagramas Mermaid legibles con el tema oscuro.** Las flechas, las líneas,
+  los bordes de los grupos y las etiquetas de las aristas salían oscuros sobre
+  el fondo oscuro y casi no se veían. Ahora, con el tema oscuro, los diagramas
+  se dibujan con colores claros sobre oscuro (también los mapas mentales, los
+  pies y las líneas de tiempo) y se vuelven a dibujar al cambiar de tema. Los
+  exports (PDF, DOCX, HTML y SVG/PNG de cada diagrama) siguen saliendo con el
+  tema claro, aptos para imprimir.
+
+### Cambiado
+- Conector `iurefficient-connect` 0.7.1 (antes 0.6.0): el panel de apps de
+  Iurefficient muestra el editor como «iureditor».
+- El nombre de la app se escribe en minúsculas («iureditor») también en lo que
+  se envía a Iurefficient (agente de usuario y app activa de la sesión
+  compartida).
+
+## v1.9.2 — 2026-09-30
+
+### Añadido
+- **Números de línea también en la vista visual.** «Números de línea» (☰ → Ver)
+  ya no sólo sirve en la vista de código: en el editor markdown numera cada
+  párrafo, encabezado, viñeta y cita, cada línea de los bloques de código y
+  cada fila de tabla. Coincide con la línea de la barra de estado y no se
+  copia, imprime ni exporta.
+- **Buscar y reemplazar saltos de línea.** La barra de búsqueda entiende `\n`
+  (salto de línea), `\t` (tabulador) y `\\` (barra invertida), en las dos
+  vistas. En la vista visual `\n` encuentra los saltos dentro de un párrafo y
+  el paso de un párrafo a otro, y resalta los párrafos vacíos que abarca; por
+  ejemplo, reemplazar `\n\n` por `\n` quita párrafos vacíos sin fundir los
+  demás, y `\n` por un espacio une párrafos. Nunca une párrafos separados por
+  un diagrama, imagen o línea horizontal.
+
+### Corregido
+- **Texto pegado desde la terminal ya no queda lleno de huecos.** Las líneas
+  en blanco de más ya no se vuelven párrafos vacíos al pegar texto con pinta
+  de markdown; se quitan los espacios con que muchas terminales rellenan las
+  líneas y los fines de línea duplicados (`\r\r\n`); el HTML que añaden
+  algunas terminales (un bloque por línea) se ignora en favor del texto
+  plano; y las listas sangradas ya no se pegan como bloque de código ni se
+  confunden con diagramas por llevar flechas.
+
+## v1.9.1 — 2026-09-29
+
+### Corregido
+- **Actualizar desde la app en Linux con el paquete .deb o .rpm.** El manifiesto
+  del actualizador sólo ofrecía el AppImage, que una instalación .deb rechaza;
+  ahora incluye el .deb y el .rpm firmados y la app instala el mismo tipo de
+  paquete que tiene (pide la contraseña de administrador).
+- Si la instalación de una actualización falla, se muestra el error con un botón
+  para abrir la página de descarga, también en el aviso automático al arrancar.
+
+## v1.9.0 — 2026-09-25
+
+### Añadido
+- **Interfaz en inglés y español.** Arranca en inglés, o en español si el
+  sistema operativo está en español; se puede elegir en ☰ → Ver → Idioma
+  (Automático, English, Español) y cambia al momento, también en la vista de
+  impresión y en las pestañas separadas. Ayuda completa en inglés y marcador
+  `{{date}}` en plantillas (fecha en el idioma de la interfaz).
+- El instalador de Windows sigue el idioma del sistema.
+
+### Cambiado
+- README en inglés; la versión en español queda en `README.es.md`.
+- Conector iurefficient-connect 0.6.0: los mensajes de la cuenta de
+  Iurefficient también salen en el idioma elegido.
+
+## v1.8.3 — 2026-09-22
+
+### Añadido
+- **Una sola sesión para las tres apps.** Si IureDav o IureTranscribe ya
+  iniciaron sesión en este equipo, iureditor arranca conectado a esa misma
+  instancia y cuenta sin pedir nada; y al iniciar sesión aquí, las otras dos la
+  encuentran. La sesión se sincroniza con el llavero antes de cada renovación
+  para que dos apps abiertas a la vez no se invaliden entre sí (conector 0.5.0).
+
+## v1.8.2 — 2026-09-21
+
+### Cambiado
+- **Iurefficient al principio del menú.** La conexión con la instancia ya no
+  está escondida dentro de «Ver»: es la primera entrada del menú (Ctrl+Shift+I).
+- **El archivo que abres se muestra primero.** Al abrir un documento con doble
+  clic, desde la terminal o desde otra app, aparece y toma el foco de inmediato;
+  las pestañas de la sesión anterior se restauran por detrás sin robárselo.
+
+### Corregido
+- La barra de búsqueda (Ctrl+F) dejaba el último contador (p. ej. «3/7») cuando
+  ya no había coincidencias; ahora muestra «Sin coincidencias» y el contador se
+  actualiza con cada Siguiente/Anterior y reemplazo.
+
+## v1.8.1 — 2026-09-21
+
+### Cambiado
+- Los instaladores de la release se publican con nombre uniforme
+  `iureditor_<versión>_1-windows-x64.exe`, `2-macos-universal.dmg`,
+  `3-linux-x64.deb`… GitHub los lista por nombre, y así aparecen primero
+  Windows, luego macOS y al final Linux. El `latest.json` del actualizador lo
+  genera el propio flujo de publicación.
+
+## v1.8.0 — 2026-09-21
+
+### Añadido
+- **Apps de Iurefficient** al pie del panel «Iurefficient»: las tres apps de
+  escritorio (IureTranscribe, iureditor e IureDav), cuáles están instaladas en
+  este equipo, la última versión publicada y botones para abrirlas o descargarlas.
+- **Enlaces `iureditor://`.** `iureditor://open?path=/ruta/doc.md` abre un
+  archivo local (IureTranscribe lo usa para «Abrir con iureditor») e
+  `iureditor://iurefficient/doc?case=…&doc=…&name=…` descarga un documento de
+  la instancia como espejo local y lo abre vinculado, listo para subir versiones.
+- Usa el conector común `iurefficient-connect` 0.4.2.
+
+## v1.7.0 — 2026-09-21
+
+### Añadido
+- **Panel «Iurefficient»** en la barra lateral (Ctrl+Shift+I, menú Ver). Conecta
+  tu cuenta con correo y contraseña (y el código de dos pasos si lo tienes; la
+  contraseña no se guarda, sólo la sesión en el llavero del sistema, compartida
+  con IureTranscribe e IureDav), busca un proyecto y abre sus documentos Markdown
+  o de texto directamente en el editor.
+- **Guardar de vuelta como versión.** Un documento abierto desde Iurefficient se
+  trabaja como un archivo normal (deshacer, borradores, imágenes) y, al guardar
+  con Ctrl+S, sube una versión nueva a la instancia; se puede desactivar en el
+  panel o subir a mano con «Subir versión ahora». Cualquier archivo local se
+  puede enviar con «Guardar en Iurefficient…» a un proyecto o a General, y a
+  partir de ahí queda vinculado.
+- Usa el conector común
+  [`iurefficient-connect`](https://github.com/ellaguno/iurefficient-connect).
+
+## v1.6.1 — 2026-08-22
+
+### Corregido
+- **El panel de archivos sigue al documento activo**. Antes solo mostraba la
+  carpeta de trabajo elegida a mano (botón de carpeta o navegación dentro del
+  panel), así que al abrir un archivo sin haber elegido carpeta el panel
+  quedaba vacío. Ahora, al abrir un archivo, guardarlo como o cambiar de
+  pestaña, el panel muestra la carpeta de ese documento; la navegación manual
+  del panel se respeta mientras no cambie la ruta del documento activo.
+
+## v1.6.0 — 2026-08-22
+
+### Añadido
+- **Buscar en los archivos de la carpeta de trabajo** (Ctrl+Shift+F, tercera
+  vista del panel lateral). Busca el término en todos los markdown y textos
+  de la carpeta, agrupa los resultados por archivo con número de línea y
+  vista previa, y al hacer clic abre el archivo en vista fuente saltando a
+  esa línea.
+- **Ir a línea** (Ctrl+L, menú Edición). En una pestaña en modo visual
+  primero cambia a la vista de código fuente, que es donde las líneas del
+  archivo existen tal cual.
+- **La posición del cursor se recuerda por archivo**: al restaurar la sesión
+  cada documento reabre donde se quedó el cursor, centrado en pantalla.
+
+### Corregido
+- **Pegar texto desde una terminal ya no añade retornos de más**. Las líneas
+  contiguas de un párrafo (texto envuelto a 80 columnas, salida de comandos)
+  se pegaban como párrafos sueltos, que al guardar ganaban una línea en
+  blanco entre cada una. Ahora un salto simple se conserva como salto simple,
+  tanto al pegar como en el viaje completo archivo → editor → archivo.
+- **Los finales de línea CRLF (Windows) se conservan al guardar**. Antes,
+  abrir y guardar un `.txt` o `.md` con finales CRLF los convertía todos a
+  LF en silencio; ahora el estilo del archivo original se detecta al abrir
+  y se repone al escribir.
+- **Números de línea en la vista de código fuente** (menú Ver → Números de
+  línea). Aplica tanto a archivos de texto plano como al fuente de un
+  markdown; las líneas largas se envuelven con sangría bajo su número y la
+  preferencia se recuerda entre sesiones.
+- **"Guardar como" respeta extensiones de texto**: guardar un documento nuevo
+  como `notas.txt` (o `.env`, `.csv`…) ya no le añade `.md` a la fuerza — se
+  guarda el texto tal cual y la pestaña pasa a modo texto plano, igual que si
+  el archivo se hubiera abierto del disco. El diálogo ofrece ahora también el
+  filtro "Texto".
+
+## v1.5.15 — 2026-08-06
+
+### Añadido
+- **Buscar y reemplazar en la vista de código fuente** (Ctrl+F). Antes la
+  búsqueda solo existía en el editor visual, así que en un archivo que no es
+  markdown (un `.sh`, un `.json`…), que siempre se abre en vista fuente,
+  Ctrl+F no hacía nada. También estaba muerta al pasar un `.md` a vista
+  fuente. Incluye navegación entre coincidencias, distinguir mayúsculas y
+  reemplazar uno o todos, igual que en el editor visual.
+
+## v1.5.14 — 2026-08-06
+
+### Corregido
+- **Diagramas ASCII con las líneas rotas**: los bloques de código heredaban el
+  interlineado del texto normal (1.6), así que los caracteres de dibujo de
+  caja (`│ ┌ ┴ …`) quedaban separados por un hueco vertical y las cajas no
+  cerraban. Ahora el interlineado de todo bloque monoespaciado es ajustado y
+  los diagramas se ven continuos.
+- **Cajas descuadradas horizontalmente**: la fuente de los bloques de código
+  era `Courier New`, que no incluye los caracteres de dibujo de caja; el
+  sistema los sustituía por otra tipografía de ancho distinto. El nuevo stack
+  monoespaciado sí los trae, así que las columnas alinean.
+- El arreglo se aplica en los cinco sitios donde se ve código: editor visual,
+  vista de código fuente, vista previa markdown, vista previa/export a PDF y
+  export a HTML y DOCX. La vista previa de impresión no tenía ninguna regla
+  propia para los bloques de código y heredaba el interlineado configurable
+  del documento.
+- Se desactivan las ligaduras tipográficas dentro de los bloques de código
+  (fuentes como Fira Code fusionaban `--` o `|>` dentro de un diagrama).
+
+## v1.5.13 — 2026-08-05
+
+### Añadido
+- **Pegar tablas ASCII como tablas reales**: al pegar salida de terminal con
+  tablas de bordes `+---+` (MySQL, CLIs), cajas Unicode `┌─┬─┐` o el formato
+  de psql (`----+----`), se convierten automáticamente en tablas markdown
+  editables. La prosa alrededor se conserva intacta.
+- **Pegar diagramas ASCII sin romper el alineado**: los bloques con pinta de
+  diagrama (cajas con flechas, árboles `├──`) se envuelven en un bloque de
+  código monoespaciado al pegar, en vez de deshacerse en párrafos.
+
+### Corregido
+- **Retornos de carro al pegar desde terminal**: el texto copiado con CRLF o
+  CR sueltos rompía la conversión markdown (fences sin cerrar, párrafos
+  fantasma). Ahora los fines de línea se normalizan antes de procesar el
+  pegado.
+
+## v1.5.12 — 2026-08-04
+
+### Añadido
+- **El esquema sigue al cursor**: con el panel lateral en «Esquema», la
+  sección donde está el cursor se resalta y se mantiene a la vista; al hacer
+  scroll sin mover el cursor, se resalta la sección visible en pantalla.
+- **Número de línea en la barra de estado**: junto a palabras y caracteres se
+  muestra la línea del cursor. En el editor visual cada bloque de texto cuenta
+  como una línea (los bloques de código suman sus saltos internos); en la
+  vista fuente es la línea exacta del archivo.
+
+### Corregido
+- **Contraste en mapas mentales mermaid**: el tema por defecto invertía el
+  color del texto en dos de las secciones (blanco sobre relleno pastel,
+  ilegible); ahora todas las etiquetas van en oscuro.
+- **Etiquetas mermaid descentradas o recortadas al exportar PNG/DOCX**: el
+  texto se medía con la fuente de la aplicación pero se rasterizaba con
+  DejaVu Sans (más ancha). Los diagramas usan ahora la misma fuente en
+  pantalla y en el export, así lo que se mide es lo que se dibuja.
+- **HTML literal en diagramas mermaid**: etiquetas como `<b>` o `<i>`
+  aparecían tal cual en el diagrama (los labels se dibujan como texto SVG, sin
+  HTML); ahora se eliminan antes de renderizar. `<br>` se conserva como salto
+  de línea.
+
+### Rendimiento (documentos grandes)
+- La serialización a markdown tras teclear (dirty-tracking, contadores)
+  espacia su frecuencia en documentos de más de ~100 KB: la escritura ya no se
+  congela a cada pausa.
+- El autoguardado de borradores reutiliza el markdown ya emitido en vez de
+  volver a serializar todo el documento.
+- Los diagramas mermaid se renderizan en cola, uno a la vez y cediendo el hilo
+  entre cada uno: al abrir un documento con decenas de diagramas la app pinta
+  progresivamente en vez de congelarse. La cola también evita que un render
+  normal se cuele en medio de un export con configuración temporal.
+- Las imágenes cargan de forma perezosa (`loading="lazy"`) y, junto con los
+  diagramas, no se pintan mientras están lejos del viewport
+  (`content-visibility: auto`).
+
+## v1.5.11 — 2026-07-29
+
+### Corregido
+- **Las imágenes ya no se rompen al «guardar como» en otra carpeta**: el
+  documento conserva rutas relativas (`assets/logo.png`) para ser portable, así
+  que al mudarlo de carpeta pasaban a buscarse donde no había nada y quedaban
+  rotas en el editor y en los exports. Ahora, al guardar en una carpeta
+  distinta:
+  - Las imágenes que viven **dentro** de la carpeta del documento se **copian**
+    a la misma ruta relativa bajo la carpeta nueva. El markdown no cambia y el
+    documento sigue siendo portable. El original se queda donde estaba.
+  - Las que viven **fuera** (p. ej. `../instance/img.png`, una biblioteca
+    compartida) **no se duplican**: se reapunta la referencia a donde ya están.
+  - Nunca se sobrescribe un archivo del destino: si ya hay uno distinto con ese
+    nombre, la copia va a un nombre libre (`logo-1.png`) y se reapunta.
+  - Las referencias que ya estaban rotas se dejan como estaban, y los ejemplos
+    dentro de bloques de código no se tocan.
+
+  Si hubo que reescribir rutas dentro del documento, se avisa (y con ello se
+  reinicia el historial de deshacer). En el caso normal —copiar— no cambia nada
+  para el usuario.
+
+## v1.5.10 — 2026-07-29
+
+### Corregido
+- **Directorio por defecto de los diálogos, unificado**: «Guardar como…» sólo
+  sugería el nombre del archivo, sin carpeta, así que el diálogo del sistema
+  abría donde le apetecía y era fácil acabar guardando en el sitio equivocado;
+  abrir, examinar imágenes y exportar (DOCX, HTML, SVG/PNG de diagramas)
+  tampoco fijaban carpeta. Ahora todos parten del mismo sitio: la carpeta del
+  documento activo si ya tiene ruta —tras un «guardar como» manda la carpeta
+  nueva— y, si es un documento sin título, la última usada (abrir, guardar o la
+  seleccionada en el panel de archivos).
+- **El directorio por defecto sobrevive al reinicio**: se guarda en la sesión,
+  en vez de volver al home hasta abrir o guardar algo.
+- **Recarga por cambio externo**: al detectar que un archivo cambió en disco, se
+  comprueba el contenido real de la pestaña en vez del indicador de «modificado»
+  (que va un tick por detrás del teclado); las últimas pulsaciones ya no pueden
+  perderse en una recarga silenciosa.
+
+## v1.5.9 — 2026-07-27
+
+### Cambios
+- **Icono de la aplicación actualizado** en todas las plataformas.
+
+### Corregido
+- **Numeración de listas ordenadas con ítems multilínea**: un ítem cuyo texto
+  continúa en líneas indentadas rompía la lista en varias listas de un solo
+  elemento y todos se numeraban «1». Ahora las líneas de continuación se unen a
+  su ítem, las líneas en blanco entre ítems (listas «loose») ya no rompen la
+  lista, y una lista que no empieza en 1 conserva su número inicial
+  (`<ol start="…">`).
+
+## v1.5.8 — 2026-07-21
+
+### Nuevo
+- **Botón de callout en la barra de herramientas**: convierte el bloque actual en
+  una **nota** (callout) con un clic; el tipo (nota, consejo, importante,
+  advertencia, precaución) se cambia luego con el selector del propio bloque.
+- **Ayuda integrada**: *Ayuda → Ayuda de iureditor* abre un documento con la guía
+  de uso del editor (interfaz, barra de herramientas, menús, inserción de
+  contenido, exportación y atajos), con imágenes y un índice navegable desde el
+  panel **Esquema del documento**.
+
+### Cambios
+- **Menú principal más claro**: las secciones (Archivo, Edición, Ver, Ayuda) se
+  ven ahora como cabeceras colapsables bien diferenciadas, con la sección activa
+  resaltada, y se pueden **plegar todas** (antes no era posible cerrar la sección
+  abierta para ver las de abajo).
+- **Nuevo icono** de la aplicación en Windows, Linux y macOS.
+- **Barra de herramientas**: se retira el botón de *fórmula en bloque*; se
+  mantiene la *fórmula en línea*.
+
+## v1.5.7 — 2026-07-20
+
+### Nuevo
+- **Instancia única**: abrir un documento con iureditor ya abierto ya no lanza
+  otra ventana. La instancia viva recibe el foco y abre el archivo en una
+  pestaña (si ya estaba abierto, solo la activa).
+- **Menú contextual propio en las pestañas** (reemplaza el del navegador):
+  **Recargar**, **Cerrar**, **Cerrar las demás**, **Cerrar las de la derecha** y
+  **Desacoplar en ventana nueva**.
+- **Desacoplar pestaña**: abre el documento en una ventana propia.
+
+## v1.5.6 — 2026-07-20
+
+### Nuevo
+- **Menú de inserción «/»**: escribe `/` en el editor para insertar títulos,
+  listas (viñetas, numerada, tareas), cita, bloque de código, tabla, diagrama
+  mermaid, fórmula, separador y callouts. Filtrable y navegable con el teclado.
+- **Vista fuente con resaltado de sintaxis** (estilo editor de código). Detecta
+  el lenguaje por extensión, así que los archivos `.json`, `.yaml`, `.xml` y
+  demás se abren coloreados.
+- **Callouts / admoniciones** (nota, consejo, importante, advertencia,
+  precaución) con icono, color y selector de tipo. Se guardan en markdown como
+  `> [!TIPO]`, compatibles con GitHub/Obsidian.
+
+## v1.5.5 — 2026-07-17
+
+### Nuevo
+- **Editor de diagramas mermaid mejorado**: al editar se abre un panel con el
+  código a la izquierda y una **vista previa en vivo** a la derecha, más
+  **plantillas** por tipo de diagrama (flujo, secuencia, clases, estados,
+  entidad–relación, Gantt, pastel). `Tab` inserta espacios en vez de mover el
+  foco.
+- **Menú contextual en las imágenes** (reemplaza el del navegador): **«Abrir en
+  editor externo»** —abre el asset con la app del sistema, pensado para editar
+  SVG de draw.io— y **«Borrar imagen»**. Al volver a la app tras editar afuera,
+  la imagen se refresca automáticamente.
+
+## v1.5.4 — 2026-07-17
+
+### Nuevo
+- **Pegar imágenes del portapapeles** a `assets/` junto al documento. En Linux
+  (WebKitGTK) el evento *paste* del DOM no entrega los bytes de una captura, así
+  que se leen desde el portapapeles del sistema con un comando nativo
+  (`read_clipboard_image`, basado en `arboard`, con soporte X11 y Wayland).
+- **Menú contextual en el panel de archivos** (reemplaza el del navegador):
+  nuevo archivo, nueva carpeta, subir un directorio y recargar. Se añadieron
+  además botones equivalentes en la cabecera del panel.
+- **Doble clic en una carpeta** para abrirla como carpeta de trabajo (raíz).
+- **Menú contextual Editar / Borrar en las fórmulas**, que permite eliminar
+  fórmulas rotas o vacías que antes quedaban atascadas.
+
+## v1.5.3 — 2026-07-16
+
+### Nuevo
+- Atajos de teclado en español.
+- Crear archivos directamente desde el panel de archivos.
+
+### Corregido
+- Sesión duplicada al reabrir la aplicación.
+
+## v1.5.2
+
+### Nuevo
+- Ancho de página configurable (columna de lectura centrada).
+
+## v1.5.1
+
+### Corregido
+- Carga de documentos Markdown con HTML embebido e imágenes fuera del
+  directorio del documento.
+
+## v1.5.0
+
+### Nuevo
+- Panel lateral de archivos de la carpeta de trabajo.

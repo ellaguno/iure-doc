@@ -500,3 +500,24 @@ fn adding_a_word_to_the_dictionary_stops_marking_it() {
     assert_eq!(std::fs::read_to_string(dir.path().join("personal.txt")).unwrap(), "altamira\n");
     assert_eq!(h.state().text, "Altamira\n", "el texto no cambia");
 }
+
+// --- Reglas de entrada (S1.22) ---
+
+/// Regresión: Intro tras abrir una cerca (```` ```rust ````) se perdía (el bloque quitaba los
+/// saltos del final y el cursor volvía atrás): no se podía escribir un bloque de código nuevo.
+#[test]
+fn a_new_code_block_can_be_typed() {
+    let mut h = blocks_harness("Antes\n\n```rust");
+    h.get_by_label("bloques").focus();
+    h.run();
+    // Al final del documento (la cerca).
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    h.key_press(Key::End);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    h.event(egui::Event::Text("fn main() {}".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().text, "Antes\n\n```rust\nfn main() {}");
+}

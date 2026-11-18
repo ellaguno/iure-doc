@@ -9,6 +9,9 @@
 //! - [`indent`]: Tab / Mayús+Tab sangran o desangran un elemento de lista.
 //! - [`toggle_wrap`]: Ctrl+B / Ctrl+I / tachado: pone o quita las marcas alrededor de la selección.
 //! - [`link`]: Ctrl+K: `[texto](url)` con la `url` seleccionada para escribirla.
+//! - [`code_exit`]: tres Intro al final de un bloque de código salen de él.
+//! - [`set_line_kind`]: Ctrl+Mayús+7/8/9 (lista numerada, viñetas, tareas) y Ctrl+Alt+1–3
+//!   (títulos) ponen o quitan el tipo de las líneas seleccionadas.
 
 /// Resultado de una edición: el texto nuevo y la selección (índices de carácter).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,6 +143,152 @@ pub fn on_enter(text: &str, cursor: usize) -> Option<Edit> {
     Some(Edit { text: out, sel_start: c, sel_end: c })
 }
 
+/// La cerca que abre el bloque de código donde está `at` (p. ej. ```` ``` ```` o `~~~~`).
+fn open_fence(text: &str, at: usize) -> Option<String> {
+    let (start, _) = line_at(text, at);
+    text.get(..start)?
+        .lines()
+        .rev()
+        .find(|l| {
+            let t = l.trim_start();
+            t.starts_with("```") || t.starts_with("~~~")
+        })
+        .map(|l| {
+            let t = l.trim_start();
+            let ch = t.chars().next().unwrap_or('`');
+            t.chars().take_while(|c| *c == ch).collect()
+        })
+}
+
+/// Intro en la segunda línea vacía seguida al final de un bloque de código (tres Intro, como en
+/// TipTap): sale del bloque. Quita las líneas vacías, cierra la cerca si faltaba y deja el cursor
+/// en un párrafo nuevo después.
+pub fn code_exit(text: &str, cursor: usize) -> Option<Edit> {
+    let at = byte_of(text, cursor);
+    if !in_fence(text, at) {
+        return None;
+    }
+    let (start, end) = line_at(text, at);
+    if !text.get(start..end)?.trim().is_empty() {
+        return None;
+    }
+    let (ps, pe) = line_at(text, start.checked_sub(1)?);
+    if !text.get(ps..pe)?.trim().is_empty() || in_fence(text, ps) != in_fence(text, at) {
+        return None;
+    }
+    let fence = open_fence(text, at)?;
+    let fence_char = fence.chars().next()?;
+    let rest = text.get(end..)?.trim_start_matches(['\n', '\r']);
+    // ¿Solo queda la cerca de cierre (o nada) después? Si hay más código, no es el final.
+    let first = rest.lines().next().unwrap_or("");
+    let closing = {
+        let t = first.trim();
+        !t.is_empty() && t.chars().all(|c| c == fence_char) && t.len() >= fence.len()
+    };
+    if !rest.trim().is_empty() && !closing {
+        return None;
+    }
+    let mut out = String::with_capacity(text.len() + fence.len() + 2);
+    out.push_str(text.get(..ps)?);
+    let after = if closing {
+        out.push_str(first.trim_end());
+        rest.get(first.len()..).unwrap_or("").trim_start_matches(['\n', '\r'])
+    } else {
+        out.push_str(&fence);
+        rest
+    };
+    out.push_str("\n\n");
+    let c = out.chars().count();
+    out.push_str(after);
+    Some(Edit { text: out, sel_start: c, sel_end: c })
+}
+
+/// Tipo de línea que ponen los atajos (Ctrl+Mayús+7/8/9, Ctrl+Alt+1–3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineKind {
+    Bullet,
+    Ordered,
+    Task,
+    Heading(u8),
+}
+
+/// La línea sin su marca de título o de lista (pero con su sangría) y qué tipo era.
+fn strip_kind(line: &str) -> (String, &str, Option<LineKind>) {
+    let indent_len = line.len() - line.trim_start_matches(' ').len();
+    let indent = line.get(..indent_len).unwrap_or("").to_string();
+    let rest = line.get(indent_len..).unwrap_or("");
+    let hashes = rest.chars().take_while(|c| *c == '#').count();
+    if (1..=6).contains(&hashes) && (rest.len() == hashes || rest.get(hashes..hashes + 1) == Some(" ")) {
+        let body = rest.get(hashes..).unwrap_or("").strip_prefix(' ').unwrap_or("");
+        return (indent, body, Some(LineKind::Heading(hashes as u8)));
+    }
+    match prefix(line) {
+        Some(p) if p.marker != "> " => {
+            let kind = if p.task.is_some() {
+                LineKind::Task
+            } else if p.number.is_some() {
+                LineKind::Ordered
+            } else {
+                LineKind::Bullet
+            };
+            (p.indent.clone(), line.get(p.len..).unwrap_or(""), Some(kind))
+        }
+        _ => (indent, rest, None),
+    }
+}
+
+/// Pone (o quita, si todas ya lo son) el tipo de línea en las líneas de la selección.
+pub fn set_line_kind(text: &str, sel_start: usize, sel_end: usize, kind: LineKind) -> Option<Edit> {
+    let (a, b) = (byte_of(text, sel_start.min(sel_end)), byte_of(text, sel_start.max(sel_end)));
+    if in_fence(text, a) {
+        return None;
+    }
+    let (first, _) = line_at(text, a);
+    let (_, last) = line_at(text, b);
+    let block = text.get(first..last)?;
+    let lines: Vec<&str> = block.split('\n').take(10_000).collect();
+    let all_same = lines.iter().all(|l| strip_kind(l).2 == Some(kind));
+    // Por línea: (inicio y largo del prefijo antes; inicio y largo del prefijo después).
+    let mut spans: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(lines.len());
+    let mut new_lines = Vec::with_capacity(lines.len());
+    let (mut old_pos, mut new_pos) = (first, first);
+    for (n, l) in lines.iter().enumerate() {
+        let (indent, body, _) = strip_kind(l);
+        let line = if all_same {
+            format!("{indent}{body}")
+        } else {
+            match kind {
+                LineKind::Bullet => format!("{indent}- {body}"),
+                LineKind::Ordered => format!("{indent}{}. {body}", n + 1),
+                LineKind::Task => format!("{indent}- [ ] {body}"),
+                LineKind::Heading(h) => format!("{}{} {body}", indent, "#".repeat(usize::from(h.clamp(1, 6)))),
+            }
+        };
+        spans.push((old_pos, l.len() - body.len(), new_pos, line.len() - body.len()));
+        old_pos += l.len() + 1;
+        new_pos += line.len() + 1;
+        new_lines.push(line);
+    }
+    let mut out = String::with_capacity(text.len() + 16);
+    out.push_str(text.get(..first)?);
+    out.push_str(&new_lines.join("\n"));
+    out.push_str(text.get(last..)?);
+    // El cursor sigue a su texto (dentro del prefijo viejo: al inicio del texto).
+    let moved = |byte: usize| -> usize {
+        let nb = match spans.iter().rev().find(|(os, ..)| *os <= byte) {
+            Some(&(os, op, ns, np)) => ns + np + (byte - os).saturating_sub(op),
+            None => byte,
+        };
+        let mut nb = nb.min(out.len());
+        while nb > 0 && !out.is_char_boundary(nb) {
+            nb -= 1;
+        }
+        char_of(&out, nb)
+    };
+    let (s0, s1) = (moved(byte_of(text, sel_start)), moved(byte_of(text, sel_end)));
+    Some(Edit { text: out, sel_start: s0, sel_end: s1 })
+}
+
 /// Tab (o Mayús+Tab con `outdent`) en un elemento de lista: dos espacios más o menos al principio.
 pub fn indent(text: &str, cursor: usize, outdent: bool) -> Option<Edit> {
     let at = byte_of(text, cursor);
@@ -211,6 +360,44 @@ pub fn link(text: &str, sel_start: usize, sel_end: usize) -> Edit {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn three_enters_leave_a_code_block() {
+        // Sin cerrar: se cierra la cerca y el cursor queda en un párrafo nuevo.
+        let t = "```rust\nfn f() {}\n\n";
+        let e = code_exit(t, t.chars().count()).unwrap();
+        assert_eq!(e.text, "```rust\nfn f() {}\n```\n\n");
+        assert_eq!(e.sel_start, e.text.chars().count());
+        // Cerrado: se respeta la cerca y lo que sigue.
+        let t = "```\nx\n\n\n```\ndespués";
+        // La segunda línea vacía empieza en el carácter 7.
+        let e = code_exit(t, 7).unwrap();
+        assert_eq!(e.text, "```\nx\n```\n\ndespués");
+        assert_eq!(&e.text.chars().take(e.sel_start).collect::<String>(), "```\nx\n```\n\n");
+        // Con una sola línea vacía, o con más código después, o fuera de código: lo normal.
+        assert!(code_exit("```\nx\n", 6).is_none());
+        assert!(code_exit("```\nx\n\n\ny\n```", 6).is_none());
+        assert!(code_exit("párrafo\n\n", 10).is_none());
+    }
+
+    #[test]
+    fn line_kind_shortcuts_set_and_toggle() {
+        let e = set_line_kind("uno\ndos", 0, 7, LineKind::Ordered).unwrap();
+        assert_eq!(e.text, "1. uno\n2. dos");
+        assert_eq!((e.sel_start, e.sel_end), (3, 13), "la selección sigue a su texto");
+        let e = set_line_kind(&e.text, 3, 13, LineKind::Ordered).unwrap();
+        assert_eq!(e.text, "uno\ndos", "otra vez: se quita");
+        let e = set_line_kind("- [x] hecha", 11, 11, LineKind::Bullet).unwrap();
+        assert_eq!(e.text, "- hecha");
+        assert_eq!(e.sel_start, 7);
+        let e = set_line_kind("  - sub", 7, 7, LineKind::Task).unwrap();
+        assert_eq!(e.text, "  - [ ] sub", "conserva la sangría");
+        let e = set_line_kind("## Título", 4, 4, LineKind::Heading(1)).unwrap();
+        assert_eq!(e.text, "# Título");
+        assert_eq!(e.sel_start, 3);
+        assert_eq!(set_line_kind("# T", 3, 3, LineKind::Heading(1)).unwrap().text, "T");
+        assert!(set_line_kind("```\nx", 5, 5, LineKind::Bullet).is_none(), "nada dentro de código");
+    }
     use super::*;
 
     fn at(text: &str, marker: char) -> (String, usize) {

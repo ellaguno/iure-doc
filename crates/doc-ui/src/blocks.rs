@@ -77,6 +77,11 @@ pub(crate) struct Chunk {
 /// Texto y espacio final de un trozo: el texto acaba al final de la línea de su último carácter
 /// visible (los espacios de esa línea, que pueden ser un salto forzado, se quedan).
 fn split_ws(piece: &str) -> (String, String) {
+    // Un bloque de código sin cerrar se sigue escribiendo: sus saltos finales son suyos (si no,
+    // Intro tras la cerca se perdería).
+    if unclosed_fence(piece) {
+        return (piece.to_string(), String::new());
+    }
     let Some((i, c)) = piece.char_indices().rev().find(|(_, c)| !c.is_whitespace()) else {
         return (String::new(), piece.to_string());
     };
@@ -86,6 +91,21 @@ fn split_ws(piece: &str) -> (String, String) {
         end -= 1;
     }
     (piece.get(..end).unwrap_or("").to_string(), piece.get(end..).unwrap_or("").to_string())
+}
+
+/// ¿Empieza con una cerca de código (```` ``` ```` o `~~~`) que no se cierra?
+fn unclosed_fence(piece: &str) -> bool {
+    let mut lines = piece.lines();
+    let Some(first) = lines.next().map(str::trim_start) else { return false };
+    let Some(ch) = first.chars().next().filter(|c| *c == '`' || *c == '~') else { return false };
+    let n = first.chars().take_while(|c| *c == ch).count();
+    if n < 3 {
+        return false;
+    }
+    !lines.any(|l| {
+        let t = l.trim();
+        t.chars().take_while(|c| *c == ch).count() >= n && t.chars().all(|c| c == ch)
+    })
 }
 
 /// Los bloques de un documento y las operaciones entre ellos (sin egui).
@@ -162,10 +182,13 @@ impl Blocks {
             p.height = height;
             p.width = width;
         }
-        // El cursor, contado sobre el texto entero, cae en uno de los trozos.
+        // El cursor, contado sobre el texto entero, cae en uno de los trozos. Si cae en el espacio
+        // tras un trozo (un salto al final de un bloque: Intro que sale de una lista, p. ej.), ahí
+        // empieza un bloque nuevo.
         let mut left = cursor;
         let mut target = None;
-        for p in &pieces {
+        let mut in_sep = None;
+        for (k, p) in pieces.iter().enumerate() {
             let n = p.content.chars().count();
             let total = n.saturating_add(p.sep.chars().count());
             if left <= n {
@@ -173,13 +196,16 @@ impl Blocks {
                 break;
             }
             if left < total {
-                target = Some((p.uid, n));
+                in_sep = Some(k);
                 break;
             }
             left -= total;
         }
         let target = target.or_else(|| pieces.last().map(|p| (p.uid, p.content.chars().count())));
         self.chunks.splice(i..=i, pieces);
+        if let Some(k) = in_sep {
+            return self.break_after(i + k);
+        }
         target
     }
 
@@ -188,7 +214,9 @@ impl Blocks {
         if i >= self.chunks.len() || self.chunks.len() >= iure_doc::MAX_BLOCKS {
             return None;
         }
-        let c = self.chunk(String::new(), "\n\n".to_string(), true);
+        // Al final del documento, un solo salto tras él.
+        let sep = if i + 1 >= self.chunks.len() { "\n" } else { "\n\n" };
+        let c = self.chunk(String::new(), sep.to_string(), true);
         let uid = c.uid;
         self.chunks.insert(i + 1, c);
         Some((uid, 0))
@@ -348,6 +376,8 @@ enum Act {
     },
     /// Una tabla cambió desde su cuadrícula (el foco sigue en la celda).
     Table(usize),
+    /// Tres Intro al final de un bloque de código: el bloque cerrado y uno nuevo debajo.
+    CodeExit(usize, String),
 }
 
 /// La tecla entre bloques que toca en el bloque `i` (antes de que la vea su campo).
@@ -388,6 +418,11 @@ fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
             return None;
         }
         let mut take = |k: Key| inp.consume_key(egui::Modifiers::NONE, k);
+        if let Some(e) = edit::code_exit(&c.content, p)
+            && take(Key::Enter)
+        {
+            return Some(Act::CodeExit(i, e.text));
+        }
         if p == len && edit::on_enter(&c.content, p).is_none() && closes(&c.content) && take(Key::Enter) {
             return Some(Act::Break(i));
         }
@@ -588,8 +623,10 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
     }
     // Pegar HTML como Markdown (fuera de los bloques de código), antes que la selección y los
     // campos.
+    // Ctrl+Mayús+V: texto plano.
     if st.active
         && let Some(p) = hooks.paste.as_ref()
+        && !ui.input(|i| i.modifiers.shift)
         && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
     {
         let focused = st.blocks.chunks.iter().find(|c| ui.memory(|m| m.has_focus(id.with(("block", c.uid)))));
@@ -976,6 +1013,13 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
             Act::MergePrev(i) => (st.blocks.merge_prev(i), true),
             Act::MergeNext(i) => (st.blocks.merge_next(i), true),
             Act::Focus(f) => (Some(f), false),
+            Act::CodeExit(i, t) => {
+                if let Some(c) = st.blocks.chunks.get_mut(i) {
+                    c.content = t.trim_end_matches(['\n', '\r']).to_string();
+                }
+                let _ = st.blocks.edited(i, 0);
+                (st.blocks.break_after(i), true)
+            }
             Act::Table(i) => {
                 // Se vuelve a partir por si acaso, pero el foco sigue en la celda.
                 let _ = st.blocks.edited(i, 0);
@@ -1058,7 +1102,7 @@ mod tests {
         if let Some(c) = b.chunks.get_mut(1) {
             c.content = "dos".into();
         }
-        assert_eq!(b.text(), "uno\n\ndos\n\n");
+        assert_eq!(b.text(), "uno\n\ndos\n", "al final del documento, un solo salto");
         assert!(uid.is_some());
     }
 
@@ -1190,5 +1234,82 @@ mod perf {
             text.len() / 1024
         );
         assert!(steady < 1_000.0 && typed < 1_000.0);
+    }
+
+    struct Instant;
+
+    impl crate::DiagramRenderer for Instant {
+        fn accepts(&self, block: &str) -> bool {
+            block.starts_with("```mermaid")
+        }
+        fn key(&self) -> u64 {
+            1
+        }
+        fn render(&self, _block: &str, _scale: f32) -> Result<crate::DiagramImage, String> {
+            Ok(crate::DiagramImage { width: 300, height: 120, rgba: vec![200; 300 * 120 * 4], points: [300.0, 120.0] })
+        }
+    }
+
+    /// S1.22: 100 páginas con 20 diagramas y el corrector: < 8 ms por cuadro al teclear
+    /// (`cargo test --release -p iure-doc-ui hundred_pages_with_diagrams -- --nocapture`).
+    #[test]
+    fn hundred_pages_with_diagrams() {
+        let page = "## Sección\n\nTexto con **negrita**, *cursiva*, `código` y [enlace](https://x.mx).\n\n- uno\n- [ ] dos\n  - tres\n\n> cita\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n";
+        let diagram = "```mermaid\ngraph LR; A --> B\n```\n\n";
+        let mut text = String::new();
+        for k in 0..1500 {
+            text.push_str(page);
+            if k % 75 == 0 {
+                text.push_str(diagram);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("iure-doc-perf-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("es_MX.aff"), "SET UTF-8\n");
+        let _ = std::fs::write(dir.join("es_MX.dic"), "3\ntexto\ncon\nuno\n");
+        let speller = crate::Speller::new(&["es"], vec![dir.clone()], None);
+        let hooks = Hooks { diagrams: Some(Arc::new(Instant)), paste: None, spell: Some(speller) };
+        let ctx = egui::Context::default();
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))),
+            ..Default::default()
+        };
+        let id = Id::unique("perf-diagrams");
+        let frame = |text: &mut String| {
+            let t = std::time::Instant::now();
+            let mut out = ctx.run_ui(input(), |ui| {
+                show_hooks(ui, id, text, "", hooks.clone());
+            });
+            out.textures_delta.clear();
+            t.elapsed().as_secs_f64() * 1000.0
+        };
+        // Los diagramas y los diccionarios llegan de otros hilos: unos cuadros para que lleguen.
+        for _ in 0..20 {
+            frame(&mut text);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let steady = frame(&mut text);
+        let mut worst = 0.0f64;
+        for k in 0..20 {
+            let t = std::time::Instant::now();
+            let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
+            if let Some(c) = st.blocks.chunks.get_mut(2) {
+                c.content.push(if k % 2 == 0 { 'x' } else { ' ' });
+            }
+            st.blocks.edited(2, 1);
+            text = st.blocks.text();
+            st.hash = hash_str(&text);
+            ctx.data_mut(|d| d.insert_temp(id, st));
+            let op = t.elapsed().as_secs_f64() * 1000.0;
+            worst = worst.max(op + frame(&mut text));
+        }
+        let diagrams = text.matches("```mermaid").count();
+        eprintln!(
+            "100 páginas ({} KB) con {diagrams} diagramas y corrector: estable {steady:.1} ms, peor tecla {worst:.1} ms",
+            text.len() / 1024
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(diagrams >= 20);
+        assert!(worst < 1_000.0, "{worst} ms");
     }
 }

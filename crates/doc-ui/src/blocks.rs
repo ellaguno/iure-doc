@@ -30,7 +30,9 @@
 //! dibujar se ven como imagen; un clic o entrar con las flechas muestra su código.
 //!
 //! **Imágenes en su lugar** ([`crate::images`]): un párrafo que es solo una imagen local se ve como
-//! la imagen (con [`crate::LocalImages`] entre los dibujantes).
+//! la imagen (con [`crate::LocalImages`] entre los dibujantes). Pegar una imagen (Ctrl+V) o soltar
+//! archivos de imagen sobre el editor las guarda con [`Hooks::images`] y las inserta en su propio
+//! bloque.
 //!
 //! **Pegar HTML como Markdown** ([`crate::paste`], con [`Hooks::paste`]): lo copiado de la web,
 //! Word o Google Docs se pega con su estructura; en un bloque de código, el texto plano.
@@ -350,6 +352,10 @@ struct State {
     find: FindState,
     /// Selección pendiente de poner en un bloque (bloque, desde, hasta), al cerrar la búsqueda.
     select: Option<(u64, usize, usize)>,
+    /// Markdown que se pegará cuando un bloque tenga el foco (imágenes soltadas sin foco).
+    pending_paste: Option<String>,
+    /// Aviso breve (texto, hasta cuándo), p. ej. por qué no se pudo pegar una imagen.
+    notice: Option<(String, f64)>,
 }
 
 /// Estado de buscar y reemplazar (Ctrl+F, Ctrl+H).
@@ -613,6 +619,25 @@ fn paint_range(ui: &Ui, galley: &egui::Galley, pos: egui::Pos2, a: usize, b: usi
     }
 }
 
+/// El bloque con el foco y si su cursor está al principio / al final de su línea.
+fn cursor_line_edges(ui: &Ui, id: Id, st: &State) -> (Option<usize>, bool, bool) {
+    let Some((i, c)) =
+        st.blocks.chunks.iter().enumerate().find(|(_, c)| ui.memory(|m| m.has_focus(id.with(("block", c.uid)))))
+    else {
+        return (None, true, true);
+    };
+    let fid = id.with(("block", c.uid));
+    let edges = TextEditState::load(ui.ctx(), fid).and_then(|s| s.cursor.char_range()).map(|r| {
+        let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
+        let chars: Vec<char> = c.content.chars().collect();
+        let start = a == 0 || chars.get(a - 1) == Some(&'\n');
+        let end = chars.get(b).is_none_or(|x| *x == '\n');
+        (start, end)
+    });
+    let (start, end) = edges.unwrap_or((true, true));
+    (Some(i), start, end)
+}
+
 /// Lo seleccionado ahora (en un bloque o entre bloques) y dónde empieza (carácter del
 /// documento), para buscarlo.
 fn selected_text(ui: &Ui, id: Id, st: &State, text: &str) -> Option<(String, usize)> {
@@ -785,7 +810,7 @@ pub fn show_with(
     hint: &str,
     diagrams: Option<Arc<dyn DiagramRenderer>>,
 ) -> Output {
-    show_hooks(ui, id, text, hint, Hooks { diagrams, paste: None, spell: None })
+    show_hooks(ui, id, text, hint, Hooks { diagrams, ..Default::default() })
 }
 
 /// Lo que la app le da al editor: quién dibuja diagramas e imágenes, de dónde sale el HTML al
@@ -797,6 +822,8 @@ pub struct Hooks {
     pub paste: Option<Arc<dyn PasteSource>>,
     /// Corrector ortográfico: subraya y sugiere con clic derecho.
     pub spell: Option<Arc<crate::Speller>>,
+    /// Dónde guardar las imágenes pegadas o soltadas sobre el editor.
+    pub images: Option<Arc<dyn crate::ImageStore>>,
 }
 
 /// Como [`show`], con los ganchos de la app.
@@ -851,26 +878,82 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
     }
     // Pegar HTML como Markdown (fuera de los bloques de código), antes que la selección y los
     // campos.
+    // Imágenes: pegadas (Ctrl+V con una imagen y sin texto) o soltadas sobre el editor.
+    if let Some(store) = hooks.images.as_ref() {
+        let mut inserts: Vec<String> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        let dropped: Vec<std::path::PathBuf> = ui.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .filter(|p| !p.as_os_str().is_empty())
+                .take(50)
+                .collect()
+        });
+        for p in dropped {
+            match store.import(&p) {
+                Ok(rel) => inserts.push(crate::image_store::markdown(&rel, None)),
+                Err(e) => errors.push(e),
+            }
+        }
+        if st.active {
+            let (paste_text, ctrl_v) = ui.input(|i| {
+                let t = i.events.iter().find_map(|e| match e {
+                    egui::Event::Paste(t) => Some(t.clone()),
+                    _ => None,
+                });
+                let v = i.events.iter().any(|e| {
+                    matches!(e, egui::Event::Key { key: Key::V, pressed: true, modifiers: m, .. } if m.command && !m.shift)
+                });
+                (t, v)
+            });
+            // Si hay texto, gana el texto (Word, la web…); una imagen sola se guarda.
+            if paste_text.as_deref().is_none_or(|t| t.trim().is_empty())
+                && (paste_text.is_some() || ctrl_v)
+                && let Some(img) = hooks.paste.as_ref().and_then(|p| p.image())
+            {
+                match store.save_pasted(&img) {
+                    Ok(rel) => inserts
+                        .push(crate::image_store::markdown(&rel, Some(iurefficient_ui::lang::pick("image", "imagen")))),
+                    Err(e) => errors.push(e),
+                }
+            }
+        }
+        if let Some(e) = errors.first() {
+            st.notice = Some((e.clone(), now + 6.0));
+        }
+        if !inserts.is_empty() {
+            let md = inserts.join("\n\n");
+            if st.active {
+                // Cada imagen en su propio bloque (si no, no se dibuja en su lugar).
+                let (_, line_start, line_end) = cursor_line_edges(ui, id, &st);
+                let md = format!("{}{md}{}", if line_start { "" } else { "\n\n" }, if line_end { "" } else { "\n\n" });
+                ui.input_mut(|i| {
+                    i.events.retain(|e| !matches!(e, egui::Event::Paste(_)));
+                    i.events.push(egui::Event::Paste(md));
+                });
+            } else if let Some(last) = st.blocks.chunks.last() {
+                // Sin foco: al final del documento.
+                st.focus = Some((last.uid, last.content.chars().count()));
+                st.pending_paste = Some(format!("\n\n{md}"));
+            }
+        }
+    }
+    if st.active
+        && let Some(md) = st.pending_paste.take()
+    {
+        ui.input_mut(|i| i.events.push(egui::Event::Paste(md)));
+    }
     // Ctrl+Mayús+V: texto plano.
     if st.active
         && let Some(p) = hooks.paste.as_ref()
         && !ui.input(|i| i.modifiers.shift)
         && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
     {
-        let focused = st.blocks.chunks.iter().find(|c| ui.memory(|m| m.has_focus(id.with(("block", c.uid)))));
-        let in_code = focused.is_some_and(|c| crate::paste::in_code_block(&c.content));
-        // ¿El cursor está al principio / al final de su línea?
-        let (line_start, line_end) = focused
-            .and_then(|c| {
-                let fid = id.with(("block", c.uid));
-                let r = TextEditState::load(ui.ctx(), fid)?.cursor.char_range()?;
-                let (a, b) = (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0));
-                let chars: Vec<char> = c.content.chars().collect();
-                let start = a == 0 || chars.get(a - 1) == Some(&'\n');
-                let end = chars.get(b).is_none_or(|x| *x == '\n');
-                Some((start, end))
-            })
-            .unwrap_or((true, true));
+        let (focused, line_start, line_end) = cursor_line_edges(ui, id, &st);
+        let in_code =
+            focused.and_then(|i| st.blocks.chunks.get(i)).is_some_and(|c| crate::paste::in_code_block(&c.content));
         if !in_code {
             crate::paste::rewrite(ui, p.as_ref(), line_start, line_end);
         }
@@ -944,6 +1027,14 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
     }
     if st.find.open {
         find_bar(ui, id, &mut st, text, now, &mut changed);
+    }
+    if let Some((msg, until)) = st.notice.clone() {
+        if now < until {
+            ui.colored_label(ui.visuals().error_fg_color, msg);
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((until - now).max(0.1)));
+        } else {
+            st.notice = None;
+        }
     }
     let finding = st.find.open && !st.find.matches.is_empty();
     let starts = (st.span.is_some() || finding).then(|| st.blocks.starts());
@@ -1580,7 +1671,7 @@ mod perf {
         let _ = std::fs::write(dir.join("es_MX.aff"), "SET UTF-8\n");
         let _ = std::fs::write(dir.join("es_MX.dic"), "3\ntexto\ncon\nuno\n");
         let speller = crate::Speller::new(&["es"], vec![dir.clone()], None);
-        let hooks = Hooks { diagrams: Some(Arc::new(Instant)), paste: None, spell: Some(speller) };
+        let hooks = Hooks { diagrams: Some(Arc::new(Instant)), spell: Some(speller), ..Default::default() };
         let ctx = egui::Context::default();
         let input = || egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0))),

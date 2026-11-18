@@ -10,6 +10,10 @@
 pub trait PasteSource: Send + Sync {
     /// El HTML que hay ahora en el portapapeles, si lo hay.
     fn html(&self) -> Option<String>;
+    /// La imagen que hay ahora en el portapapeles, si la hay.
+    fn image(&self) -> Option<crate::PastedImage> {
+        None
+    }
 }
 
 /// El portapapeles del sistema (`arboard`: X11/Wayland, Windows, macOS).
@@ -19,6 +23,11 @@ impl PasteSource for SystemClipboard {
     fn html(&self) -> Option<String> {
         let html = arboard::Clipboard::new().ok()?.get().html().ok()?;
         (!html.trim().is_empty()).then_some(html)
+    }
+
+    fn image(&self) -> Option<crate::PastedImage> {
+        let img = arboard::Clipboard::new().ok()?.get_image().ok()?;
+        Some(crate::PastedImage { width: img.width, height: img.height, rgba: img.bytes.into_owned() })
     }
 }
 
@@ -40,6 +49,7 @@ fn is_blockish(md: &str) -> bool {
         || t.starts_with('>')
         || t.starts_with('|')
         || t.starts_with("```")
+        || t.starts_with("![")
         || (digits > 0 && matches!(t.get(digits..digits + 1), Some(".") | Some(")")))
 }
 

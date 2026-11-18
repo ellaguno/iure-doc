@@ -4,7 +4,7 @@ S1.22 de `iuredesk/docs/gaps.md`: lista de lo que hace hoy IureEditor (Tauri + T
 en el editor de la suite (`iure-doc-ui`, el de IureEditor 2.0 y las notas de IureDesk). **El dueño
 la firma antes de S1.15** (retirar la versión Tauri al lograr paridad en lo que la gente usa).
 
-Estado al 2026-11-18 (`iure-doc` v0.10.0). ✅ hecho · ◐ parcial · ❌ falta · — no aplica.
+Estado al 2026-11-18 (`iure-doc` v0.11.0). ✅ hecho · ◐ parcial · ❌ falta · — no aplica.
 
 ## Edición (P0, uso diario)
 
@@ -14,7 +14,7 @@ Estado al 2026-11-18 (`iure-doc` v0.10.0). ✅ hecho · ◐ parcial · ❌ falta
 | Negrita, cursiva, tachado, código en línea, enlaces | ✅ | Las marcas se ocultan fuera de la línea del cursor. `2*3*4` es cursiva (así lo lee CommonMark y todo visor); para multiplicar: `2 * 3 * 4`, `2\*3\*4` o `×` |
 | Bloques de código con lenguaje | ✅ | Resaltado de sintaxis (`syntect`, ~40 lenguajes, Rust puro con `fancy-regex`) con los colores del tema; abreviaturas `ts`, `sh`, `yml`, `py`… |
 | Tablas | ✅ | Cuadrícula en su lugar: Tab/Mayús+Tab, Intro, filas/columnas, alineación, «Markdown» |
-| Imágenes | ◐ | Locales de la carpeta del documento en su lugar; **falta pegar o arrastrar una imagen** (TipTap la guarda en `assets/`); SVG e imágenes dentro de un párrafo se ven como Markdown |
+| Imágenes | ✅ | Locales de la carpeta del documento en su lugar; pegar (Ctrl+V con una imagen) o soltar archivos de imagen las guarda junto al documento (`assets/` en IureEditor, como TipTap; `img/` en IureDesk). SVG e imágenes dentro de un párrafo se ven como Markdown |
 | Deshacer/rehacer | ✅ | Del documento entero, también partir y unir bloques |
 | Copiar/pegar | ✅ | Pegar HTML (web, Word, Google Docs) como Markdown; Ctrl+Mayús+V texto plano. **Falta**: copiar con formato hacia otras apps (se copia el Markdown) |
 | Selección entre bloques | ✅ | Ctrl+A, Mayús+flechas, Mayús+clic, arrastrar |

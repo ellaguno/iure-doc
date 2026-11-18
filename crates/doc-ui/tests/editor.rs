@@ -466,7 +466,7 @@ fn spell_harness(text: &str) -> (Harness<'static, State>, std::sync::Arc<iure_do
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    let hooks = iure_doc_ui::Hooks { diagrams: None, paste: None, spell: Some(sp.clone()) };
+    let hooks = iure_doc_ui::Hooks { spell: Some(sp.clone()), ..Default::default() };
     let h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
         move |ui, st: &mut State| {
             let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("sp"), &mut st.text, "Escribe", hooks.clone());
@@ -520,4 +520,90 @@ fn a_new_code_block_can_be_typed() {
     h.event(egui::Event::Text("fn main() {}".into()));
     h.run_steps(2);
     assert_eq!(h.state().text, "Antes\n\n```rust\nfn main() {}");
+}
+
+// --- Pegar y soltar imágenes ---
+
+struct ImagePaste;
+
+impl iure_doc_ui::PasteSource for ImagePaste {
+    fn html(&self) -> Option<String> {
+        None
+    }
+    fn image(&self) -> Option<iure_doc_ui::PastedImage> {
+        Some(iure_doc_ui::PastedImage { width: 4, height: 3, rgba: vec![90; 48] })
+    }
+}
+
+#[derive(Debug)]
+struct Dropped(std::path::PathBuf);
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+fn image_harness(text: &str, dir: std::path::PathBuf) -> Harness<'static, State> {
+    let hooks = iure_doc_ui::Hooks {
+        paste: Some(std::sync::Arc::new(ImagePaste)),
+        images: Some(std::sync::Arc::new(iure_doc_ui::FolderImages::new(Some(dir), "img"))),
+        ..Default::default()
+    };
+    Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("imgs"), &mut st.text, "Escribe", hooks.clone());
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        State { text: text.to_string() },
+    )
+}
+
+#[test]
+fn pasting_an_image_saves_it_and_inserts_its_own_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = image_harness("Antes\n", dir.path().to_path_buf());
+    block_cursor_at(&mut h, 5);
+    // Ctrl+V con solo una imagen en el portapapeles: egui no trae texto.
+    h.event(egui::Event::Paste(String::new()));
+    h.run_steps(3);
+    let t = h.state().text.clone();
+    assert!(t.starts_with("Antes\n\n![imagen](img/imagen-"), "en su propio bloque: {t:?}");
+    let rel = t.split("](").nth(1).and_then(|r| r.split(')').next()).unwrap();
+    assert!(rel.starts_with("img/imagen-") && dir.path().join(rel).is_file(), "{rel}");
+}
+
+#[test]
+fn text_in_the_clipboard_wins_over_the_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = image_harness("\n", dir.path().to_path_buf());
+    block_cursor_at(&mut h, 0);
+    h.event(egui::Event::Paste("hola".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().text, "hola\n");
+    assert!(!dir.path().join("img").exists(), "no se guardó ninguna imagen");
+}
+
+#[test]
+fn dropping_an_image_file_copies_and_inserts_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let src = outside.path().join("Sello del despacho.png");
+    image::RgbaImage::from_pixel(5, 5, image::Rgba([0, 90, 180, 255])).save(&src).unwrap();
+    let mut h = image_harness("Antes\n", dir.path().to_path_buf());
+    h.run_steps(2);
+    h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped(src)));
+    h.run_steps(4);
+    assert_eq!(h.state().text, "Antes\n\n![Sello del despacho](img/Sello-del-despacho.png)\n");
+    assert!(dir.path().join("img/Sello-del-despacho.png").is_file());
+    // Algo que no es imagen: se explica y no se inserta.
+    let txt = outside.path().join("notas.txt");
+    std::fs::write(&txt, "x").unwrap();
+    h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped(txt)));
+    h.run_steps(2);
+    assert!(h.query_by_label("Aquí solo se pueden soltar imágenes.").is_some());
+    assert!(!h.state().text.contains("notas"));
 }

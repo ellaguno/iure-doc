@@ -740,9 +740,6 @@ pub fn show_with(
                                 ui.add_space(g);
                             }
                             y += dh + g;
-                            if resp.is_none() {
-                                resp = Some(rd);
-                            }
                             continue;
                         }
                     }
@@ -817,9 +814,6 @@ pub fn show_with(
                         ui.add_space(g);
                     }
                     y += th + g;
-                    if resp.is_none() {
-                        resp = Some(ui.interact(out.rect, fid.with("table"), egui::Sense::hover()));
-                    }
                     continue;
                 }
                 if focused {
@@ -960,6 +954,8 @@ pub fn show_with(
         ui.ctx().request_repaint();
     }
     ui.data_mut(|d| d.insert_temp(id, st));
+    // La que nombra el anfitrión es siempre la de un campo de texto (nunca la de una imagen, un
+    // diagrama o una tabla, que conservan sus propios nombres).
     let response = resp.unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()));
     Output { changed, response }
 }

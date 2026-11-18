@@ -17,7 +17,7 @@ Lo usan IureDesk (notas), IureProject (notas de tareas) e IureEditor 2.0. El pla
 ## Usarlo
 
 ```toml
-iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.5.0" }
+iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.5.1" }
 ```
 
 Para trabajar a la vez en este repositorio y en una app, sin publicar una etiqueta, en la app

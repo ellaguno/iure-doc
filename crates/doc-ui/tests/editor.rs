@@ -394,3 +394,13 @@ fn local_images_are_shown_in_place_and_remote_ones_are_explained() {
     h.run_steps(3);
     assert!(h.query_by_label("Imagen 2: Sello del despacho").is_none(), "se edita el Markdown");
 }
+
+/// Regresión: con una imagen como primer bloque, el anfitrión renombraba la imagen al nombrar la
+/// respuesta del editor (perdía «Imagen 1: …» para lectores de pantalla).
+#[test]
+fn an_image_as_the_first_block_keeps_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 90, 180, 255])).save(dir.path().join("p.png")).unwrap();
+    let mut h = images_harness("![Punto](p.png)\n", dir.path().to_path_buf());
+    assert!(wait_for(&mut h, "Imagen 1: Punto"));
+}

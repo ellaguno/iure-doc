@@ -42,6 +42,7 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
 
 mod blocks;
 mod history;
+mod span;
 pub use blocks::show as show_blocks;
 
 /// Colores y letra del editor.

@@ -180,3 +180,63 @@ fn undo_reverts_joining_blocks() {
     h.run_steps(2);
     assert!(h.state().text.contains('!'), "{:?}", h.state().text);
 }
+
+#[test]
+fn ctrl_a_selects_the_whole_document_and_typing_replaces_it() {
+    let mut h = blocks_harness("uno\n\ndos\n\ntres\n");
+    block_cursor_at(&mut h, 1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().text, "x");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().text, "uno\n\ndos\n\ntres\n");
+}
+
+#[test]
+fn shift_arrows_select_across_blocks() {
+    let mut h = blocks_harness("uno\n\ndos\n");
+    block_cursor_at(&mut h, 1);
+    // De «u|no» al inicio de «dos», y dos más: «no\n\ndo».
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowDown);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowRight);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowRight);
+    h.run_steps(2);
+    h.key_press(Key::Backspace);
+    h.run_steps(2);
+    assert_eq!(h.state().text, "us\n");
+    // El cursor quedó donde estaba la selección.
+    h.event(egui::Event::Text("-".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().text, "u-s\n");
+}
+
+#[test]
+fn cut_copies_the_selection_and_escape_cancels_it() {
+    let mut h = blocks_harness("uno\n\ndos\n");
+    block_cursor_at(&mut h, 0);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    h.event(egui::Event::Text("¡".into()));
+    h.run_steps(2);
+    assert!(h.state().text.contains('¡') && h.state().text.contains("dos"), "{:?}", h.state().text);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    h.event(egui::Event::Cut);
+    h.step();
+    let copied = h
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t.contains("uno\n\ndos")));
+    h.run();
+    assert_eq!(h.state().text, "");
+    assert!(copied, "lo cortado va al portapapeles");
+}

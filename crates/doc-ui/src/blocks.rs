@@ -18,7 +18,10 @@
 //! ([`crate::history`]): deshacen también partir, unir y crear bloques, y lo tecleado seguido es un
 //! solo paso.
 //!
-//! Pendiente (siguiente entrega): selección que cruce bloques.
+//! **Selección que cruza bloques** ([`crate::span`]): Ctrl+A, Mayús+flechas en el borde de un
+//! bloque, Mayús+clic en otro bloque o arrastrar de un bloque a otro. Mientras existe, el editor
+//! toma copiar, cortar, pegar, borrar, teclear encima, Intro y Mayús+flechas (por líneas del
+//! texto); Esc, una flecha o un clic la quitan. La pinta el editor sobre cada bloque visible.
 
 use std::hash::{Hash, Hasher};
 
@@ -27,7 +30,9 @@ use egui::text_edit::TextEditState;
 use egui::{Id, Key, Ui};
 use iure_doc::edit;
 
-use crate::{EditorStyle, Output, cached_galley, field, style_key};
+use std::sync::Arc;
+
+use crate::{EditorStyle, Output, cached_galley, field, span, style_key};
 
 /// Un bloque del editor.
 #[derive(Clone, Debug, PartialEq)]
@@ -196,32 +201,60 @@ impl Blocks {
         self.merge_prev(i + 1)
     }
 
+    /// Dónde empieza (en caracteres del documento, [`Blocks::text`]) el texto de cada bloque.
+    pub(crate) fn starts(&self) -> Vec<usize> {
+        fn push(s: &str, n: &mut usize, tail: &mut (Option<char>, Option<char>)) {
+            let mut last: Vec<char> = s.chars().rev().take(2).collect();
+            last.reverse();
+            for ch in last {
+                *tail = (tail.1, Some(ch));
+            }
+            *n = n.saturating_add(s.chars().count());
+        }
+        let mut out = Vec::with_capacity(self.chunks.len());
+        let mut n = 0usize;
+        let mut tail = (None, None);
+        for c in &self.chunks {
+            if c.born {
+                if c.content.is_empty() {
+                    out.push(n);
+                    continue;
+                }
+                if n > 0 {
+                    while tail != (Some('\n'), Some('\n')) {
+                        push("\n", &mut n, &mut tail);
+                    }
+                }
+            }
+            out.push(n);
+            push(&c.content, &mut n, &mut tail);
+            push(&c.sep, &mut n, &mut tail);
+        }
+        out
+    }
+
     /// Caracteres del documento antes del bloque `uid`.
     pub(crate) fn offset_of(&self, uid: u64) -> usize {
-        let mut n = 0usize;
-        for c in &self.chunks {
-            if c.uid == uid {
-                break;
-            }
-            n = n.saturating_add(c.content.chars().count()).saturating_add(c.sep.chars().count());
-        }
-        n
+        let starts = self.starts();
+        self.index_of(uid).and_then(|i| starts.get(i).copied()).unwrap_or(0)
     }
 
     /// El bloque y la posición de un carácter del documento (en su texto, no en su espacio final).
     pub(crate) fn at_offset(&self, offset: usize) -> Focus {
-        let mut left = offset;
-        let mut last = (0, 0);
-        for c in &self.chunks {
-            let n = c.content.chars().count();
-            let total = n.saturating_add(c.sep.chars().count());
-            if left < total || left <= n {
-                return (c.uid, left.min(n));
+        let starts = self.starts();
+        let mut best: Option<(&Chunk, usize)> = None;
+        for (c, &s) in self.chunks.iter().zip(&starts) {
+            if s > offset {
+                break;
             }
-            left -= total;
-            last = (c.uid, n);
+            if !(c.born && c.content.is_empty()) || best.is_none() {
+                best = Some((c, s));
+            }
         }
-        last
+        match best {
+            Some((c, s)) => (c.uid, (offset - s).min(c.content.chars().count())),
+            None => self.chunks.first().map_or((0, 0), |c| (c.uid, 0)),
+        }
     }
 
     fn index_of(&self, uid: u64) -> Option<usize> {
@@ -241,6 +274,11 @@ struct State {
     history: crate::history::History,
     /// ¿Algún bloque tenía el foco el cuadro anterior? (Entonces Ctrl+Z es del editor.)
     active: bool,
+    /// Selección que cruza bloques: (ancla, cabeza) en caracteres del documento.
+    span: Option<(usize, usize)>,
+    /// Cursor del bloque con el foco (bloque, posición) cuando no había botón pulsado: de ahí
+    /// parte Mayús+clic en otro bloque.
+    caret: Option<Focus>,
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -269,15 +307,19 @@ enum Act {
     MergePrev(usize),
     MergeNext(usize),
     Focus(Focus),
+    /// Selección entre bloques: de (bloque, posición) a (bloque, posición); `caret` pone el
+    /// cursor en la cabeza (con teclado; arrastrando no).
+    Span {
+        from: (usize, usize),
+        to: (usize, usize),
+        caret: bool,
+    },
 }
 
 /// La tecla entre bloques que toca en el bloque `i` (antes de que la vea su campo).
 fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
     let c = blocks.chunks.get(i)?;
     let range = TextEditState::load(ui.ctx(), fid)?.cursor.char_range()?;
-    if range.primary.index != range.secondary.index {
-        return None;
-    }
     let p = range.primary.index.0;
     let len = c.content.chars().count();
     let row = cached_galley(ui, fid).map(|g| {
@@ -287,6 +329,26 @@ fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
     let (first_row, last_row) = row.unwrap_or((true, true));
     let prev = i.checked_sub(1).and_then(|j| blocks.chunks.get(j));
     let next = blocks.chunks.get(i + 1);
+    // Mayús+flecha en el borde del bloque: la selección sigue en el bloque de al lado.
+    let shift_only = ui.input(|x| x.modifiers.shift && !x.modifiers.command && !x.modifiers.alt && !x.modifiers.ctrl);
+    if shift_only {
+        let anchor = (i, range.secondary.index.0);
+        return ui.input_mut(|inp| {
+            let mut take = |k: Key| inp.consume_key(egui::Modifiers::SHIFT, k);
+            if next.is_some() && ((last_row && take(Key::ArrowDown)) || (p == len && take(Key::ArrowRight))) {
+                return Some(Act::Span { from: anchor, to: (i + 1, 0), caret: true });
+            }
+            if let Some(pr) = prev
+                && ((first_row && take(Key::ArrowUp)) || (p == 0 && take(Key::ArrowLeft)))
+            {
+                return Some(Act::Span { from: anchor, to: (i - 1, pr.content.chars().count()), caret: true });
+            }
+            None
+        });
+    }
+    if range.primary.index != range.secondary.index {
+        return None;
+    }
     ui.input_mut(|inp| {
         if !inp.modifiers.is_none() {
             return None;
@@ -313,6 +375,93 @@ fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
         }
         None
     })
+}
+
+/// Lo que pide la entrada con una selección entre bloques.
+enum SpanOp {
+    Copy,
+    Cut,
+    /// Cambiar lo seleccionado por este texto (teclear, pegar, borrar).
+    Put(String),
+    Move(span::Move),
+    /// Quitar la selección y dejar el cursor aquí.
+    End(usize),
+    All,
+    Clear,
+}
+
+/// Toma (antes que los campos) las teclas y el portapapeles que actúan sobre la selección.
+fn span_input(ui: &Ui, a: usize, head: usize) -> Option<SpanOp> {
+    use egui::Event;
+    use span::Move;
+    ui.input_mut(|i| {
+        if i.pointer.any_pressed() && !i.modifiers.shift {
+            return Some(SpanOp::Clear);
+        }
+        let mut op = None;
+        let events = std::mem::take(&mut i.events);
+        let mut keep = Vec::with_capacity(events.len());
+        for e in events {
+            if op.is_some() {
+                keep.push(e);
+                continue;
+            }
+            let got = match &e {
+                Event::Copy => Some(SpanOp::Copy),
+                Event::Cut => Some(SpanOp::Cut),
+                Event::Paste(t) | Event::Text(t) => Some(SpanOp::Put(t.clone())),
+                Event::Key { key, pressed: true, modifiers: m, .. } => match key {
+                    Key::Backspace | Key::Delete => Some(SpanOp::Put(String::new())),
+                    Key::Enter if !m.command => Some(SpanOp::Put("\n".into())),
+                    Key::Escape => Some(SpanOp::End(head)),
+                    Key::A if m.command => Some(SpanOp::All),
+                    Key::ArrowLeft if m.shift => Some(SpanOp::Move(Move::Left)),
+                    Key::ArrowRight if m.shift => Some(SpanOp::Move(Move::Right)),
+                    Key::ArrowUp if m.shift => Some(SpanOp::Move(Move::Up)),
+                    Key::ArrowDown if m.shift => Some(SpanOp::Move(Move::Down)),
+                    Key::Home if m.shift => {
+                        Some(SpanOp::Move(if m.command { Move::DocStart } else { Move::LineStart }))
+                    }
+                    Key::End if m.shift => Some(SpanOp::Move(if m.command { Move::DocEnd } else { Move::LineEnd })),
+                    Key::ArrowLeft | Key::ArrowUp | Key::Home => Some(SpanOp::End(a.min(head))),
+                    Key::ArrowRight | Key::ArrowDown | Key::End => Some(SpanOp::End(a.max(head))),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match got {
+                Some(g) => op = Some(g),
+                None => keep.push(e),
+            }
+        }
+        i.events = keep;
+        op
+    })
+}
+
+/// Pinta la selección sobre las posiciones `a..b` (caracteres del bloque) de un bloque dibujado
+/// en `pos`; `past`: la selección sigue después del bloque (se pinta hasta el final de la fila).
+fn paint_span(ui: &Ui, galley: &egui::Galley, pos: egui::Pos2, a: usize, b: usize, past: bool) {
+    let color = ui.visuals().selection.bg_fill.gamma_multiply(0.6);
+    let rows = galley.rows.len();
+    let mut r0 = 0usize;
+    for (k, row) in galley.rows.iter().enumerate() {
+        let n = row.char_count_excluding_newline().0;
+        let all = row.char_count_including_newline().0;
+        let last = k + 1 == rows;
+        if a <= r0 + n && b >= r0 {
+            let (s, e) = (a.max(r0), b.min(r0 + n));
+            let to_end = b > r0 + n || (past && last);
+            if s < e || to_end {
+                let x0 = row.x_offset(egui::text::CharIndex(s - r0));
+                let x1 = if to_end { row.size.x + 6.0 } else { row.x_offset(egui::text::CharIndex(e - r0)) };
+                let min = pos + row.pos.to_vec2() + egui::vec2(x0, 0.0);
+                let max = pos + row.pos.to_vec2() + egui::vec2(x1, row.size.y);
+                ui.painter().rect_filled(egui::Rect::from_min_max(min, max), 0.0, color);
+            }
+        }
+        r0 += all;
+    }
 }
 
 /// El editor por bloques, con su propio desplazamiento. `id` identifica su estado entre cuadros.
@@ -364,11 +513,62 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
         st.focus = keep.map(|g| st.blocks.at_offset(g));
         st.history.clear();
     }
+    // Selección entre bloques: Ctrl+A la crea; con ella, teclas y portapapeles son del editor.
+    if !st.active {
+        st.span = None;
+    }
+    if st.active && st.span.is_none() && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::A)) {
+        let n = text.chars().count();
+        st.span = (n > 0).then_some((0, n));
+    }
+    if let Some((a, head)) = st.span {
+        let op = span_input(ui, a, head);
+        let mut put = |st: &mut State, text: &mut String, with: &str| {
+            let (new, cur) = span::replace(text, a, head, with);
+            let before = std::mem::replace(text, new);
+            st.history.record(&before, text, now);
+            st.blocks = Blocks::new(text);
+            st.hash = hash_str(text);
+            st.focus = Some(st.blocks.at_offset(cur));
+            st.span = None;
+            changed = true;
+        };
+        match op {
+            Some(SpanOp::Copy) => ui.ctx().copy_text(span::slice(text, a, head)),
+            Some(SpanOp::Cut) => {
+                ui.ctx().copy_text(span::slice(text, a, head));
+                put(&mut st, text, "");
+            }
+            Some(SpanOp::Put(w)) => put(&mut st, text, &w),
+            Some(SpanOp::Move(m)) => {
+                let h2 = span::move_head(text, head, m);
+                st.span = (h2 != a).then_some((a, h2));
+                st.focus = Some(st.blocks.at_offset(h2));
+            }
+            Some(SpanOp::End(at)) => {
+                st.span = None;
+                st.focus = Some(st.blocks.at_offset(at));
+            }
+            Some(SpanOp::All) => {
+                let n = text.chars().count();
+                st.span = (n > 0).then_some((0, n));
+            }
+            Some(SpanOp::Clear) => st.span = None,
+            None => {}
+        }
+        ui.ctx().request_repaint();
+    }
+    let starts = st.span.map(|_| st.blocks.starts());
+    let shift = ui.input(|i| i.modifiers.shift);
+    let pointer_busy = ui.input(|i| i.pointer.any_down() || i.pointer.any_released());
     let row_h = (style.size * 1.35).max(1.0);
     let gap = (style.size * 0.6).round();
     let mut act: Option<Act> = None;
     let mut active = false;
     let mut resp: Option<egui::Response> = None;
+    let mut placed: Vec<(usize, egui::Pos2, Arc<egui::Galley>)> = Vec::new();
+    // Arrastre que sale de su bloque: (bloque, ancla en él, puntero).
+    let mut dragging: Option<(usize, usize, egui::Pos2)> = None;
     egui::ScrollArea::vertical().id_salt(id.with("scroll")).auto_shrink([false, false]).show_viewport(
         ui,
         |ui, viewport| {
@@ -414,6 +614,7 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
                 let hint = if only && c.content.is_empty() { hint } else { "" };
                 let (changed, out) = field(ui, fid, &mut c.content, hint, 1, &style, skey);
                 c.height = out.response.response.rect.height();
+                let ch = c.height;
                 // Cada bloque con nombre para lectores de pantalla (el anfitrión nombra el que devuelve).
                 let pos = i + 1;
                 out.response.response.widget_info(|| {
@@ -424,6 +625,45 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
                     let at = out.state.cursor.char_range().map_or(0, |r| r.primary.index.0);
                     act = Some(Act::Edited(i, at));
                 }
+                let (uid, len) = (c.uid, c.content.chars().count());
+                // La parte de la selección entre bloques que cae en este bloque.
+                if let (Some((a, b)), Some(starts)) = (st.span, starts.as_ref()) {
+                    let s0 = starts.get(i).copied().unwrap_or(0);
+                    let (lo, hi) = (a.min(b), a.max(b));
+                    if hi > s0 && lo <= s0 + len {
+                        paint_span(
+                            ui,
+                            &out.galley,
+                            out.galley_pos,
+                            lo.saturating_sub(s0),
+                            (hi - s0).min(len),
+                            hi > s0 + len,
+                        );
+                    }
+                }
+                let r = &out.response.response;
+                let primary = out.state.cursor.char_range().map_or(0, |x| x.primary.index.0);
+                // Mayús+clic en otro bloque: selección desde el cursor que había.
+                if r.clicked()
+                    && shift
+                    && act.is_none()
+                    && let Some((cu, cl)) = st.caret
+                    && cu != uid
+                    && let Some(fi) = st.blocks.index_of(cu)
+                {
+                    act = Some(Act::Span { from: (fi, cl), to: (i, primary), caret: false });
+                }
+                if r.dragged()
+                    && let Some(pp) = ui.input(|x| x.pointer.interact_pos())
+                    && !r.rect.contains(pp)
+                {
+                    let anchor = out.state.cursor.char_range().map_or(0, |x| x.secondary.index.0);
+                    dragging = Some((i, anchor, pp));
+                }
+                if focused && !pointer_busy {
+                    st.caret = Some((uid, primary));
+                }
+                placed.push((i, out.galley_pos, Arc::clone(&out.galley)));
                 if wanted.is_some() {
                     out.response.response.scroll_to_me(None);
                     st.focus = None;
@@ -431,13 +671,25 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
                 if g > 0.0 {
                     ui.add_space(g);
                 }
-                y += c.height + g;
+                y += ch + g;
                 if focused || resp.is_none() {
                     resp = Some(out.response.response);
                 }
             }
             if space > 0.0 {
                 ui.add_space(space);
+            }
+            // Arrastrar fuera del bloque: la selección sigue en el bloque bajo el puntero.
+            if let Some((di, anchor, pp)) = dragging
+                && act.is_none()
+                && let Some((j, gp, g)) = placed.iter().rev().find(|(_, gp, _)| gp.y <= pp.y).or(placed.first())
+            {
+                if *j == di {
+                    st.span = None;
+                } else {
+                    let local = g.cursor_from_pos(pp - *gp).index.0;
+                    act = Some(Act::Span { from: (di, anchor), to: (*j, local), caret: false });
+                }
             }
         },
     );
@@ -449,6 +701,13 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
             Act::MergePrev(i) => (st.blocks.merge_prev(i), true),
             Act::MergeNext(i) => (st.blocks.merge_next(i), true),
             Act::Focus(f) => (Some(f), false),
+            Act::Span { from, to, caret } => {
+                let starts = st.blocks.starts();
+                let at = |(i, l): (usize, usize)| starts.get(i).copied().unwrap_or(0).saturating_add(l);
+                let (a, h) = (at(from), at(to));
+                st.span = (a != h).then_some((a, h));
+                (if caret { st.blocks.chunks.get(to.0).map(|c| (c.uid, to.1)) } else { None }, false)
+            }
         };
         // Un cursor en un bloque que ya no existe no se pone.
         st.focus = focus.filter(|(u, _)| st.blocks.index_of(*u).is_some());
@@ -552,6 +811,22 @@ mod tests {
         assert_eq!(again.at_offset(4), again.chunks.first().map_or((0, 0), |c| (c.uid, 3)));
         // Más allá del final: al final del último.
         assert_eq!(again.at_offset(999), again.chunks.get(2).map_or((0, 0), |c| (c.uid, 4)));
+    }
+
+    #[test]
+    fn starts_match_the_written_document() {
+        let mut b = Blocks::new("uno");
+        b.break_after(0);
+        if let Some(c) = b.chunks.get_mut(1) {
+            c.content = "dos".into();
+        }
+        b.break_after(1);
+        let t = b.text();
+        let chars: Vec<char> = t.chars().collect();
+        for (c, s) in b.chunks.iter().zip(b.starts()) {
+            let got: String = chars.iter().skip(s).take(c.content.chars().count()).collect();
+            assert_eq!(got, c.content, "{t:?}");
+        }
     }
 
     #[test]

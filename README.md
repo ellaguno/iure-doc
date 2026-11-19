@@ -8,7 +8,10 @@ El documento de la suite Iurefficient, **100 % en Rust**:
   funciones puras (`edit`) y `chunks` para editores por bloques.
 - **`iure-doc-ui`** (egui 0.37): `DocEditor`, Markdown con formato al teclear. `show` es un solo
   campo (notas cortas); `show_blocks` es el editor por bloques para documentos largos (~1 ms por
-  tecla con 100 páginas), con deshacer de todo el documento, selección que cruza bloques tablas editables en su lugar (`table`: cuadrícula sin pérdidas para lo que no se toca) y diagramas dibujados en su lugar (`show_blocks_with` con un `DiagramRenderer` de la app: el editor no dibuja, la app sí) e imágenes locales en su lugar (`LocalImages`, solo dentro de la carpeta del documento; `Renderers` junta dibujantes); pegar HTML como Markdown (`iure_doc::html`, y en el editor con `Hooks { paste: Some(SystemClipboard) }`) y corrector ortográfico (`Speller`, diccionarios Hunspell del sistema con `spellbook`; `Hooks { spell }`). `apply_external` escribe o borra en el cursor desde fuera (dictado con IureVoz), con deshacer.
+  tecla con 100 páginas), con deshacer de todo el documento, selección que cruza bloques tablas editables en su lugar (`table`: cuadrícula sin pérdidas para lo que no se toca) y diagramas dibujados en su lugar (`show_blocks_with` con un `DiagramRenderer` de la app: el editor no dibuja, la app sí) e imágenes locales en su lugar (`LocalImages`, solo dentro de la carpeta del documento; `Renderers` junta dibujantes); pegar HTML como Markdown (`iure_doc::html`, y en el editor con `Hooks { paste: Some(SystemClipboard) }`) y corrector ortográfico (`Speller`, diccionarios Hunspell del sistema con `spellbook`; `Hooks { spell }`). `apply_external` escribe o borra en el cursor desde fuera (dictado con IureVoz), con deshacer. **WYSIWYG** (v0.15.0): las marcas de bloque se dibujan en vez de verse (viñetas por nivel,
+  casillas que se marcan con un clic, barra de las citas, regla, código en una caja con su lenguaje
+  y las cercas plegadas fuera del bloque) y el texto va en una columna de documento centrada; el
+  Markdown no cambia.
 
 - **`iure-doc-export`** (sin egui): exportar a **HTML autocontenido** (`html::html`: estilos dentro,
   imágenes en `data:`, diagramas en SVG; el HTML del documento se exporta como texto) y a **DOCX**
@@ -28,7 +31,7 @@ Lo usan IureDesk (notas), IureProject (notas de tareas) e IureEditor 2.0. El pla
 ## Usarlo
 
 ```toml
-iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.14.0" }
+iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.15.0" }
 ```
 
 Para trabajar a la vez en este repositorio y en una app, sin publicar una etiqueta, en la app

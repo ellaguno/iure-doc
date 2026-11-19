@@ -237,3 +237,49 @@ fn escape_selects_the_match_even_far_below() {
     typed(&mut h, "hebra");
     assert!(h.state().text.ends_with("Aquí está la hebra.\n"), "{:?}", &h.state().text[h.state().text.len() - 40..]);
 }
+
+/// WYSIWYG: la casilla de una tarea se marca y desmarca con un clic (el Markdown cambia `[ ]` ↔
+/// `[x]`), sin teclas.
+#[test]
+fn clicking_a_task_box_toggles_it() {
+    let mut h = harness("- [ ] Llamar al notario\n", iure_doc_ui::Hooks::default());
+    h.run_steps(2);
+    let r = h.get_by_label("doc").rect();
+    // La casilla está tras el guion invisible, en el primer renglón.
+    let row = r.top() + 10.0;
+    let click = |h: &mut Harness<'static, State>, x: f32| {
+        let p = egui::pos2(r.left() + x, row);
+        h.event(egui::Event::PointerMoved(p));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+        }
+        h.run_steps(3);
+    };
+    // Prueba unas posiciones a lo ancho de la casilla (el tamaño de letra depende del tema).
+    for x in [12.0, 14.0, 16.0, 18.0, 20.0] {
+        click(&mut h, x);
+        if h.state().text.contains("[x]") {
+            break;
+        }
+    }
+    assert_eq!(h.state().text, "- [x] Llamar al notario\n");
+    // Lejos de la casilla, un clic no cambia nada.
+    let before = h.state().text.clone();
+    let p = egui::pos2(r.left() + 120.0, row);
+    h.event(egui::Event::PointerMoved(p));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+    }
+    h.run_steps(3);
+    assert_eq!(h.state().text, before);
+}

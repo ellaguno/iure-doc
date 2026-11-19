@@ -1062,340 +1062,354 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
     egui::ScrollArea::vertical().id_salt(id.with("scroll")).auto_shrink([false, false]).show_viewport(
         ui,
         |ui, viewport| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            let width = ui.available_width();
-            // Se dibuja una pantalla más arriba y abajo: desplazar no muestra huecos.
-            let margin = viewport.height();
-            let mut y = 0.0f32;
-            let mut space = 0.0f32;
-            let only = st.blocks.chunks.len() == 1;
-            for i in 0..st.blocks.chunks.len() {
-                let pending = st.focus;
-                let Some(c) = st.blocks.chunks.get_mut(i) else { break };
-                if (c.width - width).abs() >= 1.0 {
-                    c.height = estimate(&c.content, row_h, width, style.size);
-                    c.width = width;
-                }
-                let fid = id.with(("block", c.uid));
-                let g = if c.born || c.sep.matches('\n').count() >= 2 { gap } else { 0.0 };
-                let wanted = pending.and_then(|(u, at)| (u == c.uid).then_some(at));
-                let focused = ui.memory(|m| m.has_focus(fid));
-                active |= focused || wanted.is_some();
-                let in_table = st.cell.is_some_and(|x| x.0 == c.uid) || st.cell_focus.is_some_and(|x| x.0 == c.uid);
-                // Una tabla editada como Markdown vuelve a cuadrícula al dejarla.
-                if c.raw && !focused && wanted.is_none() {
-                    c.raw = false;
-                }
-                let seen = y + c.height + g >= viewport.min.y - margin && y <= viewport.max.y + margin;
-                let pinned = scroll_to == Some(c.uid) || select_uid == Some(c.uid);
-                if !(seen || focused || wanted.is_some() || in_table || pinned) {
-                    space += c.height + g;
-                    y += c.height + g;
-                    continue;
-                }
-                if space > 0.0 {
-                    ui.add_space(space);
-                    space = 0.0;
-                }
-                // Un diagrama que la app sabe dibujar: la imagen en su lugar (con el foco en su
-                // campo se edita el código).
-                let mut diagram_error: Option<String> = None;
-                if let Some(r) = diagrams.as_ref()
-                    && let Some(c) = st.blocks.chunks.get_mut(i)
-                    && !c.raw
-                    && !focused
-                    && r.accepts(&c.content)
-                {
-                    if wanted.is_some() {
-                        // Entrar con las flechas: se edita el código.
-                        c.raw = true;
-                    } else {
-                        let uid = c.uid;
-                        // Una imagen (con su texto alternativo) o un diagrama.
-                        let image_alt = crate::images::image_of(&c.content).map(|(_, alt)| alt);
-                        let resp_d = match st.diagrams.get(ui.ctx(), r, &c.content) {
-                            View::Failed(e) => {
-                                diagram_error = Some(e);
-                                None
-                            }
-                            View::Pending => {
-                                let h = c.height.max(48.0);
-                                let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
-                                ui.painter().text(
-                                    rect.left_center() + egui::vec2(4.0, 0.0),
-                                    egui::Align2::LEFT_CENTER,
-                                    iurefficient_ui::lang::pick("Drawing the diagram…", "Dibujando el diagrama…"),
-                                    egui::FontId::proportional(style.size * 0.9),
-                                    style.muted,
-                                );
-                                Some(resp)
-                            }
-                            View::Image(tex, size) => {
-                                // Al ancho del editor y, como mucho, de este alto.
-                                let k = (width / size.x.max(1.0)).min(MAX_IMAGE_HEIGHT / size.y.max(1.0)).min(1.0);
-                                let (w, h) = (size.x * k, size.y * k);
-                                let pick = iurefficient_ui::lang::pick;
-                                let hover = if image_alt.is_some() {
-                                    pick("Click to edit the image", "Clic para editar la imagen")
-                                } else {
-                                    pick("Click to edit the diagram", "Clic para editar el diagrama")
-                                };
-                                let resp = ui
-                                    .add(egui::Image::new((tex.id(), egui::vec2(w, h))).sense(egui::Sense::click()))
-                                    .on_hover_text(hover)
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                                let pos = i + 1;
-                                resp.widget_info(|| {
-                                    let label = match &image_alt {
-                                        Some(alt) if !alt.trim().is_empty() => {
-                                            format!("{} {pos}: {alt}", pick("Image", "Imagen"))
-                                        }
-                                        Some(_) => format!("{} {pos}", pick("Image", "Imagen")),
-                                        None => format!("{} {pos}", pick("Diagram", "Diagrama")),
-                                    };
-                                    egui::WidgetInfo::labeled(egui::Role::Button, true, label)
-                                });
-                                if resp.clicked() {
-                                    if let Some(c) = st.blocks.chunks.get_mut(i) {
-                                        c.raw = true;
-                                    }
-                                    st.focus = Some((uid, 0));
+            // El texto en una columna de documento centrada (como un procesador de textos): con
+            // ventanas anchas no se va de orilla a orilla.
+            let full = ui.available_width();
+            let col = full.min(style.size * crate::COLUMN_EMS).max(full.min(240.0));
+            let mut column = ui.available_rect_before_wrap();
+            column.min.x += ((full - col) / 2.0).floor();
+            column.max.x = column.min.x + col;
+            ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let width = ui.available_width();
+                // Se dibuja una pantalla más arriba y abajo: desplazar no muestra huecos.
+                let margin = viewport.height();
+                let mut y = 0.0f32;
+                let mut space = 0.0f32;
+                let only = st.blocks.chunks.len() == 1;
+                for i in 0..st.blocks.chunks.len() {
+                    let pending = st.focus;
+                    let Some(c) = st.blocks.chunks.get_mut(i) else { break };
+                    if (c.width - width).abs() >= 1.0 {
+                        c.height = estimate(&c.content, row_h, width, style.size);
+                        c.width = width;
+                    }
+                    let fid = id.with(("block", c.uid));
+                    let g = if c.born || c.sep.matches('\n').count() >= 2 { gap } else { 0.0 };
+                    let wanted = pending.and_then(|(u, at)| (u == c.uid).then_some(at));
+                    let focused = ui.memory(|m| m.has_focus(fid));
+                    active |= focused || wanted.is_some();
+                    let in_table = st.cell.is_some_and(|x| x.0 == c.uid) || st.cell_focus.is_some_and(|x| x.0 == c.uid);
+                    // Una tabla editada como Markdown vuelve a cuadrícula al dejarla.
+                    if c.raw && !focused && wanted.is_none() {
+                        c.raw = false;
+                    }
+                    let seen = y + c.height + g >= viewport.min.y - margin && y <= viewport.max.y + margin;
+                    let pinned = scroll_to == Some(c.uid) || select_uid == Some(c.uid);
+                    if !(seen || focused || wanted.is_some() || in_table || pinned) {
+                        space += c.height + g;
+                        y += c.height + g;
+                        continue;
+                    }
+                    if space > 0.0 {
+                        ui.add_space(space);
+                        space = 0.0;
+                    }
+                    // Un diagrama que la app sabe dibujar: la imagen en su lugar (con el foco en su
+                    // campo se edita el código).
+                    let mut diagram_error: Option<String> = None;
+                    if let Some(r) = diagrams.as_ref()
+                        && let Some(c) = st.blocks.chunks.get_mut(i)
+                        && !c.raw
+                        && !focused
+                        && r.accepts(&c.content)
+                    {
+                        if wanted.is_some() {
+                            // Entrar con las flechas: se edita el código.
+                            c.raw = true;
+                        } else {
+                            let uid = c.uid;
+                            // Una imagen (con su texto alternativo) o un diagrama.
+                            let image_alt = crate::images::image_of(&c.content).map(|(_, alt)| alt);
+                            let resp_d = match st.diagrams.get(ui.ctx(), r, &c.content) {
+                                View::Failed(e) => {
+                                    diagram_error = Some(e);
+                                    None
                                 }
-                                Some(resp)
-                            }
-                        };
-                        if let Some(rd) = resp_d {
-                            let len = st.blocks.chunks.get(i).map_or(0, |c| c.content.chars().count());
-                            find_tint(ui, &mut st, starts.as_ref(), i, len, rd.rect, scroll_to == Some(uid));
-                            let dh = rd.rect.height();
-                            if let Some(c) = st.blocks.chunks.get_mut(i) {
-                                c.height = dh;
-                            }
-                            if let (Some((a, b)), Some(starts)) = (st.span, starts.as_ref()) {
-                                let s0 = starts.get(i).copied().unwrap_or(0);
-                                if a.max(b) > s0 && a.min(b) <= s0 {
-                                    ui.painter().rect_filled(
-                                        rd.rect,
-                                        0.0,
-                                        ui.visuals().selection.bg_fill.gamma_multiply(0.4),
+                                View::Pending => {
+                                    let h = c.height.max(48.0);
+                                    let (rect, resp) =
+                                        ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::hover());
+                                    ui.painter().text(
+                                        rect.left_center() + egui::vec2(4.0, 0.0),
+                                        egui::Align2::LEFT_CENTER,
+                                        iurefficient_ui::lang::pick("Drawing the diagram…", "Dibujando el diagrama…"),
+                                        egui::FontId::proportional(style.size * 0.9),
+                                        style.muted,
                                     );
+                                    Some(resp)
+                                }
+                                View::Image(tex, size) => {
+                                    // Al ancho del editor y, como mucho, de este alto.
+                                    let k = (width / size.x.max(1.0)).min(MAX_IMAGE_HEIGHT / size.y.max(1.0)).min(1.0);
+                                    let (w, h) = (size.x * k, size.y * k);
+                                    let pick = iurefficient_ui::lang::pick;
+                                    let hover = if image_alt.is_some() {
+                                        pick("Click to edit the image", "Clic para editar la imagen")
+                                    } else {
+                                        pick("Click to edit the diagram", "Clic para editar el diagrama")
+                                    };
+                                    let resp = ui
+                                        .add(egui::Image::new((tex.id(), egui::vec2(w, h))).sense(egui::Sense::click()))
+                                        .on_hover_text(hover)
+                                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                    let pos = i + 1;
+                                    resp.widget_info(|| {
+                                        let label = match &image_alt {
+                                            Some(alt) if !alt.trim().is_empty() => {
+                                                format!("{} {pos}: {alt}", pick("Image", "Imagen"))
+                                            }
+                                            Some(_) => format!("{} {pos}", pick("Image", "Imagen")),
+                                            None => format!("{} {pos}", pick("Diagram", "Diagrama")),
+                                        };
+                                        egui::WidgetInfo::labeled(egui::Role::Button, true, label)
+                                    });
+                                    if resp.clicked() {
+                                        if let Some(c) = st.blocks.chunks.get_mut(i) {
+                                            c.raw = true;
+                                        }
+                                        st.focus = Some((uid, 0));
+                                    }
+                                    Some(resp)
+                                }
+                            };
+                            if let Some(rd) = resp_d {
+                                let len = st.blocks.chunks.get(i).map_or(0, |c| c.content.chars().count());
+                                find_tint(ui, &mut st, starts.as_ref(), i, len, rd.rect, scroll_to == Some(uid));
+                                let dh = rd.rect.height();
+                                if let Some(c) = st.blocks.chunks.get_mut(i) {
+                                    c.height = dh;
+                                }
+                                if let (Some((a, b)), Some(starts)) = (st.span, starts.as_ref()) {
+                                    let s0 = starts.get(i).copied().unwrap_or(0);
+                                    if a.max(b) > s0 && a.min(b) <= s0 {
+                                        ui.painter().rect_filled(
+                                            rd.rect,
+                                            0.0,
+                                            ui.visuals().selection.bg_fill.gamma_multiply(0.4),
+                                        );
+                                    }
+                                }
+                                if g > 0.0 {
+                                    ui.add_space(g);
+                                }
+                                y += dh + g;
+                                continue;
+                            }
+                        }
+                    }
+                    // Una tabla: cuadrícula de celdas.
+                    if let Some(grid) = st.blocks.chunks.get(i).filter(|c| !c.raw).and_then(|c| table_of(&c.content)) {
+                        let uid = st.blocks.chunks.get(i).map_or(0, |c| c.uid);
+                        let mut focus_to = st.cell_focus.and_then(|(u, r, cc)| (u == uid).then_some((r, cc)));
+                        if let Some(at) = wanted {
+                            focus_to = Some(if at == 0 { (0, 0) } else { (grid.rows.len().saturating_sub(1), 0) });
+                            st.focus = None;
+                        }
+                        if focus_to.is_some() {
+                            st.cell_focus = None;
+                        }
+                        let bar = st.cell.and_then(|(u, r, cc)| (u == uid).then_some((r, cc))).or(focus_to);
+                        let out = table_ui::show(ui, fid, &grid, &style, focus_to, bar);
+                        if let Some((r, cc)) = out.focused.or(focus_to) {
+                            st.cell = Some((uid, r, cc));
+                            active = true;
+                        }
+                        if let Some((r, cc)) = out.focus_next {
+                            st.cell_focus = Some((uid, r, cc));
+                            st.cell = Some((uid, r, cc));
+                            active = true;
+                        }
+                        match out.act {
+                            Some(TableAct::Changed(md)) => {
+                                if let Some(c) = st.blocks.chunks.get_mut(i) {
+                                    c.content = md;
+                                }
+                                if act.is_none() {
+                                    act = Some(Act::Table(i));
                                 }
                             }
-                            if g > 0.0 {
-                                ui.add_space(g);
+                            Some(TableAct::Leave(down)) => {
+                                st.cell = None;
+                                let to = if down {
+                                    st.blocks.chunks.get(i + 1).map(|n| (n.uid, 0))
+                                } else {
+                                    i.checked_sub(1)
+                                        .and_then(|j| st.blocks.chunks.get(j))
+                                        .map(|p| (p.uid, p.content.chars().count()))
+                                };
+                                if let Some(f) = to
+                                    && act.is_none()
+                                {
+                                    act = Some(Act::Focus(f));
+                                }
                             }
-                            y += dh + g;
-                            continue;
+                            Some(TableAct::Raw) => {
+                                if let Some(c) = st.blocks.chunks.get_mut(i) {
+                                    c.raw = true;
+                                }
+                                st.cell = None;
+                                st.focus = Some((uid, 0));
+                            }
+                            None => {}
                         }
+                        let len = st.blocks.chunks.get(i).map_or(0, |c| c.content.chars().count());
+                        find_tint(ui, &mut st, starts.as_ref(), i, len, out.rect, scroll_to == Some(uid));
+                        let th = out.rect.height();
+                        if let Some(c) = st.blocks.chunks.get_mut(i) {
+                            c.height = th;
+                        }
+                        // Dentro de una selección entre bloques: la tabla entera se ve seleccionada.
+                        if let (Some((a, b)), Some(starts)) = (st.span, starts.as_ref()) {
+                            let s0 = starts.get(i).copied().unwrap_or(0);
+                            if a.max(b) > s0 && a.min(b) <= s0 {
+                                ui.painter().rect_filled(
+                                    out.rect,
+                                    0.0,
+                                    ui.visuals().selection.bg_fill.gamma_multiply(0.4),
+                                );
+                            }
+                        }
+                        if g > 0.0 {
+                            ui.add_space(g);
+                        }
+                        y += th + g;
+                        continue;
                     }
-                }
-                // Una tabla: cuadrícula de celdas.
-                if let Some(grid) = st.blocks.chunks.get(i).filter(|c| !c.raw).and_then(|c| table_of(&c.content)) {
-                    let uid = st.blocks.chunks.get(i).map_or(0, |c| c.uid);
-                    let mut focus_to = st.cell_focus.and_then(|(u, r, cc)| (u == uid).then_some((r, cc)));
+                    if focused {
+                        st.cell = None;
+                    }
                     if let Some(at) = wanted {
-                        focus_to = Some(if at == 0 { (0, 0) } else { (grid.rows.len().saturating_sub(1), 0) });
-                        st.focus = None;
+                        let mut s = TextEditState::load(ui.ctx(), fid).unwrap_or_default();
+                        s.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
+                        s.store(ui.ctx(), fid);
+                        ui.memory_mut(|m| m.request_focus(fid));
                     }
-                    if focus_to.is_some() {
-                        st.cell_focus = None;
+                    if let Some((u, a, b)) = st.select
+                        && select_uid == Some(u)
+                        && st.blocks.chunks.get(i).is_some_and(|c| c.uid == u)
+                    {
+                        let mut s = TextEditState::load(ui.ctx(), fid).unwrap_or_default();
+                        s.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(a), CCursor::new(b))));
+                        s.store(ui.ctx(), fid);
+                        ui.memory_mut(|m| m.request_focus(fid));
+                        st.select = None;
                     }
-                    let bar = st.cell.and_then(|(u, r, cc)| (u == uid).then_some((r, cc))).or(focus_to);
-                    let out = table_ui::show(ui, fid, &grid, &style, focus_to, bar);
-                    if let Some((r, cc)) = out.focused.or(focus_to) {
-                        st.cell = Some((uid, r, cc));
-                        active = true;
+                    if focused && act.is_none() {
+                        act = block_key(ui, fid, &st.blocks, i);
                     }
-                    if let Some((r, cc)) = out.focus_next {
-                        st.cell_focus = Some((uid, r, cc));
-                        st.cell = Some((uid, r, cc));
-                        active = true;
+                    let Some(c) = st.blocks.chunks.get_mut(i) else { break };
+                    let hint = if only && c.content.is_empty() { hint } else { "" };
+                    let (changed, out) = field(ui, fid, &mut c.content, hint, 1, &style, skey, hooks.spell.as_deref());
+                    c.height = out.response.response.rect.height();
+                    let mut ch = c.height;
+                    // Un diagrama con error: el código y, debajo, qué falla.
+                    if let Some(e) = &diagram_error {
+                        ch += ui.colored_label(ui.visuals().error_fg_color, e.as_str()).rect.height();
+                        c.height = ch;
                     }
-                    match out.act {
-                        Some(TableAct::Changed(md)) => {
-                            if let Some(c) = st.blocks.chunks.get_mut(i) {
-                                c.content = md;
-                            }
-                            if act.is_none() {
-                                act = Some(Act::Table(i));
-                            }
-                        }
-                        Some(TableAct::Leave(down)) => {
-                            st.cell = None;
-                            let to = if down {
-                                st.blocks.chunks.get(i + 1).map(|n| (n.uid, 0))
-                            } else {
-                                i.checked_sub(1)
-                                    .and_then(|j| st.blocks.chunks.get(j))
-                                    .map(|p| (p.uid, p.content.chars().count()))
-                            };
-                            if let Some(f) = to
-                                && act.is_none()
-                            {
-                                act = Some(Act::Focus(f));
-                            }
-                        }
-                        Some(TableAct::Raw) => {
-                            if let Some(c) = st.blocks.chunks.get_mut(i) {
-                                c.raw = true;
-                            }
-                            st.cell = None;
-                            st.focus = Some((uid, 0));
-                        }
-                        None => {}
+                    // Cada bloque con nombre para lectores de pantalla (el anfitrión nombra el que devuelve).
+                    let pos = i + 1;
+                    out.response.response.widget_info(|| {
+                        let label = format!("{} {pos}", iurefficient_ui::lang::pick("Block", "Bloque"));
+                        egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, label)
+                    });
+                    if changed && act.is_none() {
+                        let at = out.state.cursor.char_range().map_or(0, |r| r.primary.index.0);
+                        act = Some(Act::Edited(i, at));
                     }
-                    let len = st.blocks.chunks.get(i).map_or(0, |c| c.content.chars().count());
-                    find_tint(ui, &mut st, starts.as_ref(), i, len, out.rect, scroll_to == Some(uid));
-                    let th = out.rect.height();
-                    if let Some(c) = st.blocks.chunks.get_mut(i) {
-                        c.height = th;
-                    }
-                    // Dentro de una selección entre bloques: la tabla entera se ve seleccionada.
+                    let (uid, len) = (c.uid, c.content.chars().count());
+                    // La parte de la selección entre bloques que cae en este bloque.
                     if let (Some((a, b)), Some(starts)) = (st.span, starts.as_ref()) {
                         let s0 = starts.get(i).copied().unwrap_or(0);
-                        if a.max(b) > s0 && a.min(b) <= s0 {
-                            ui.painter().rect_filled(out.rect, 0.0, ui.visuals().selection.bg_fill.gamma_multiply(0.4));
+                        let (lo, hi) = (a.min(b), a.max(b));
+                        if hi > s0 && lo <= s0 + len {
+                            paint_span(
+                                ui,
+                                &out.galley,
+                                out.galley_pos,
+                                lo.saturating_sub(s0),
+                                (hi - s0).min(len),
+                                hi > s0 + len,
+                            );
                         }
+                    }
+                    // Las coincidencias de la búsqueda en este bloque.
+                    if finding && let Some(starts) = starts.as_ref() {
+                        let s0 = starts.get(i).copied().unwrap_or(0);
+                        let ms = &st.find.matches;
+                        let k0 = ms.partition_point(|r| r.end <= s0);
+                        for (k, r) in ms.iter().enumerate().skip(k0) {
+                            if r.start > s0 + len {
+                                break;
+                            }
+                            let color = if k == st.find.current { FIND_CURRENT } else { FIND_ALL };
+                            paint_range(
+                                ui,
+                                &out.galley,
+                                out.galley_pos,
+                                r.start.saturating_sub(s0),
+                                (r.end - s0).min(len),
+                                r.end > s0 + len,
+                                color,
+                            );
+                        }
+                    }
+                    if scroll_to == Some(uid) {
+                        out.response.response.scroll_to_me(Some(egui::Align::Center));
+                        st.find.scroll = false;
+                    }
+                    let r = &out.response.response;
+                    let primary = out.state.cursor.char_range().map_or(0, |x| x.primary.index.0);
+                    // Mayús+clic en otro bloque: selección desde el cursor que había.
+                    if r.clicked()
+                        && shift
+                        && act.is_none()
+                        && let Some((cu, cl)) = st.caret
+                        && cu != uid
+                        && let Some(fi) = st.blocks.index_of(cu)
+                    {
+                        act = Some(Act::Span { from: (fi, cl), to: (i, primary), caret: false });
+                    }
+                    if r.dragged()
+                        && let Some(pp) = ui.input(|x| x.pointer.interact_pos())
+                        && !r.rect.contains(pp)
+                    {
+                        let anchor = out.state.cursor.char_range().map_or(0, |x| x.secondary.index.0);
+                        dragging = Some((i, anchor, pp));
+                    }
+                    if focused && !pointer_busy {
+                        st.caret = Some((uid, primary));
+                    }
+                    placed.push((i, out.galley_pos, Arc::clone(&out.galley)));
+                    if wanted.is_some() {
+                        out.response.response.scroll_to_me(None);
+                        st.focus = None;
                     }
                     if g > 0.0 {
                         ui.add_space(g);
                     }
-                    y += th + g;
-                    continue;
-                }
-                if focused {
-                    st.cell = None;
-                }
-                if let Some(at) = wanted {
-                    let mut s = TextEditState::load(ui.ctx(), fid).unwrap_or_default();
-                    s.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
-                    s.store(ui.ctx(), fid);
-                    ui.memory_mut(|m| m.request_focus(fid));
-                }
-                if let Some((u, a, b)) = st.select
-                    && select_uid == Some(u)
-                    && st.blocks.chunks.get(i).is_some_and(|c| c.uid == u)
-                {
-                    let mut s = TextEditState::load(ui.ctx(), fid).unwrap_or_default();
-                    s.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(a), CCursor::new(b))));
-                    s.store(ui.ctx(), fid);
-                    ui.memory_mut(|m| m.request_focus(fid));
-                    st.select = None;
-                }
-                if focused && act.is_none() {
-                    act = block_key(ui, fid, &st.blocks, i);
-                }
-                let Some(c) = st.blocks.chunks.get_mut(i) else { break };
-                let hint = if only && c.content.is_empty() { hint } else { "" };
-                let (changed, out) = field(ui, fid, &mut c.content, hint, 1, &style, skey, hooks.spell.as_deref());
-                c.height = out.response.response.rect.height();
-                let mut ch = c.height;
-                // Un diagrama con error: el código y, debajo, qué falla.
-                if let Some(e) = &diagram_error {
-                    ch += ui.colored_label(ui.visuals().error_fg_color, e.as_str()).rect.height();
-                    c.height = ch;
-                }
-                // Cada bloque con nombre para lectores de pantalla (el anfitrión nombra el que devuelve).
-                let pos = i + 1;
-                out.response.response.widget_info(|| {
-                    let label = format!("{} {pos}", iurefficient_ui::lang::pick("Block", "Bloque"));
-                    egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, label)
-                });
-                if changed && act.is_none() {
-                    let at = out.state.cursor.char_range().map_or(0, |r| r.primary.index.0);
-                    act = Some(Act::Edited(i, at));
-                }
-                let (uid, len) = (c.uid, c.content.chars().count());
-                // La parte de la selección entre bloques que cae en este bloque.
-                if let (Some((a, b)), Some(starts)) = (st.span, starts.as_ref()) {
-                    let s0 = starts.get(i).copied().unwrap_or(0);
-                    let (lo, hi) = (a.min(b), a.max(b));
-                    if hi > s0 && lo <= s0 + len {
-                        paint_span(
-                            ui,
-                            &out.galley,
-                            out.galley_pos,
-                            lo.saturating_sub(s0),
-                            (hi - s0).min(len),
-                            hi > s0 + len,
-                        );
+                    y += ch + g;
+                    if focused || resp.is_none() {
+                        resp = Some(out.response.response);
                     }
                 }
-                // Las coincidencias de la búsqueda en este bloque.
-                if finding && let Some(starts) = starts.as_ref() {
-                    let s0 = starts.get(i).copied().unwrap_or(0);
-                    let ms = &st.find.matches;
-                    let k0 = ms.partition_point(|r| r.end <= s0);
-                    for (k, r) in ms.iter().enumerate().skip(k0) {
-                        if r.start > s0 + len {
-                            break;
-                        }
-                        let color = if k == st.find.current { FIND_CURRENT } else { FIND_ALL };
-                        paint_range(
-                            ui,
-                            &out.galley,
-                            out.galley_pos,
-                            r.start.saturating_sub(s0),
-                            (r.end - s0).min(len),
-                            r.end > s0 + len,
-                            color,
-                        );
-                    }
+                if space > 0.0 {
+                    ui.add_space(space);
                 }
-                if scroll_to == Some(uid) {
-                    out.response.response.scroll_to_me(Some(egui::Align::Center));
-                    st.find.scroll = false;
-                }
-                let r = &out.response.response;
-                let primary = out.state.cursor.char_range().map_or(0, |x| x.primary.index.0);
-                // Mayús+clic en otro bloque: selección desde el cursor que había.
-                if r.clicked()
-                    && shift
+                // Arrastrar fuera del bloque: la selección sigue en el bloque bajo el puntero.
+                if let Some((di, anchor, pp)) = dragging
                     && act.is_none()
-                    && let Some((cu, cl)) = st.caret
-                    && cu != uid
-                    && let Some(fi) = st.blocks.index_of(cu)
+                    && let Some((j, gp, g)) = placed.iter().rev().find(|(_, gp, _)| gp.y <= pp.y).or(placed.first())
                 {
-                    act = Some(Act::Span { from: (fi, cl), to: (i, primary), caret: false });
+                    if *j == di {
+                        st.span = None;
+                    } else {
+                        let local = g.cursor_from_pos(pp - *gp).index.0;
+                        act = Some(Act::Span { from: (di, anchor), to: (*j, local), caret: false });
+                    }
                 }
-                if r.dragged()
-                    && let Some(pp) = ui.input(|x| x.pointer.interact_pos())
-                    && !r.rect.contains(pp)
-                {
-                    let anchor = out.state.cursor.char_range().map_or(0, |x| x.secondary.index.0);
-                    dragging = Some((i, anchor, pp));
-                }
-                if focused && !pointer_busy {
-                    st.caret = Some((uid, primary));
-                }
-                placed.push((i, out.galley_pos, Arc::clone(&out.galley)));
-                if wanted.is_some() {
-                    out.response.response.scroll_to_me(None);
-                    st.focus = None;
-                }
-                if g > 0.0 {
-                    ui.add_space(g);
-                }
-                y += ch + g;
-                if focused || resp.is_none() {
-                    resp = Some(out.response.response);
-                }
-            }
-            if space > 0.0 {
-                ui.add_space(space);
-            }
-            // Arrastrar fuera del bloque: la selección sigue en el bloque bajo el puntero.
-            if let Some((di, anchor, pp)) = dragging
-                && act.is_none()
-                && let Some((j, gp, g)) = placed.iter().rev().find(|(_, gp, _)| gp.y <= pp.y).or(placed.first())
-            {
-                if *j == di {
-                    st.span = None;
-                } else {
-                    let local = g.cursor_from_pos(pp - *gp).index.0;
-                    act = Some(Act::Span { from: (di, anchor), to: (*j, local), caret: false });
-                }
-            }
+            });
         },
     );
     st.active = active;

@@ -125,6 +125,37 @@ struct Fmt {
     misspelled: bool,
     /// Clase de resaltado de sintaxis en un bloque de código ([`highlight`]; 0: ninguna).
     syn: u8,
+    /// Marca de bloque que se dibuja en vez de verse como texto (WYSIWYG): [`DECO_BULLET`]…
+    deco: u8,
+    /// Cuerpo de un bloque de código (el fondo es una caja, no tramo a tramo).
+    block_code: bool,
+    /// Texto de una tarea hecha (tenue y tachado).
+    done: bool,
+    /// Invisible pero con su ancho: encima se dibuja la viñeta, la casilla, la barra de la cita.
+    concealed: bool,
+    /// Sangría de un elemento de lista anidado: se ve más ancha que sus espacios.
+    indent: bool,
+}
+
+/// Marcas de bloque dibujadas (WYSIWYG). El texto sigue ahí (el cursor, deshacer y el Markdown no
+/// cambian); se oculta y encima se pinta lo que representa.
+const DECO_BULLET: u8 = 1;
+const DECO_TASK: u8 = 2;
+const DECO_TASK_DONE: u8 = 3;
+const DECO_QUOTE: u8 = 4;
+/// Cerca de un bloque de código: se pliega cuando el bloque no tiene el cursor.
+const DECO_FENCE: u8 = 5;
+const DECO_RULE: u8 = 6;
+/// El `- ` delante de una casilla: invisible, con su ancho (las tareas se alinean con las viñetas).
+const DECO_TASK_DASH: u8 = 7;
+
+/// Una marca de bloque para dibujar: tipo, bytes del texto y nivel de sangría.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Deco {
+    kind: u8,
+    start: usize,
+    end: usize,
+    level: u8,
 }
 
 fn inline_marker(x: &mut Fmt) {
@@ -228,16 +259,21 @@ fn formats(text: &str) -> Vec<Fmt> {
                     ),
                     pulldown_cmark::CodeBlockKind::Indented => None,
                 };
-                set(r.clone(), &|x| x.code = true);
-                // Las cercas.
+                set(r.clone(), &|x| {
+                    x.code = true;
+                    x.block_code = true;
+                });
+                // Las cercas (con su salto de línea: plegadas no ocupan renglón).
                 let first = slice.find('\n').unwrap_or(slice.len());
                 if slice.trim_start().starts_with(['`', '~']) {
                     set(r.start..r.start + first, &|x| x.marker = true);
+                    set(r.start..(r.start + first + 1).min(r.end), &|x| x.deco = DECO_FENCE);
                     let body = slice.trim_end_matches('\n');
                     if let Some(last) = body.rfind('\n')
                         && body.get(last + 1..).is_some_and(|l| l.trim_start().starts_with(['`', '~']))
                     {
                         set(r.start + last + 1..r.start + body.len(), &|x| x.marker = true);
+                        set(r.start + last..r.start + body.len(), &|x| x.deco = DECO_FENCE);
                     }
                 }
             }
@@ -245,12 +281,47 @@ fn formats(text: &str) -> Vec<Fmt> {
                 // La viñeta o el número (y la casilla), desde el principio de su línea.
                 let ls = text.get(..r.start).and_then(|b| b.rfind('\n')).map_or(0, |i| i + 1);
                 let line = text.get(ls..).and_then(|t| t.lines().next()).unwrap_or("");
-                // Dentro de una cita, la línea empieza con `> `.
-                let quote = line.len() - line.trim_start_matches(['>', ' ']).len();
+                // Dentro de una cita, la línea empieza con `> ` (o varios): solo eso se salta; la
+                // sangría de la lista es del elemento.
+                let mut quote = 0usize;
+                while let Some(rest) = line.get(quote..) {
+                    let t = rest.trim_start_matches(' ');
+                    if !t.starts_with('>') {
+                        break;
+                    }
+                    quote += rest.len() - t.len() + 1;
+                    if line.get(quote..).is_some_and(|r| r.starts_with(' ')) {
+                        quote += 1;
+                    }
+                }
                 let inner = line.get(quote..).unwrap_or("");
                 if let Some(p) = edit::prefix(inner) {
                     let at = ls + quote;
-                    set(at + p.indent.len()..at + p.len, &|x| x.bullet = true);
+                    let m0 = at + p.indent.len();
+                    set(m0..at + p.len, &|x| x.bullet = true);
+                    if !p.indent.is_empty() {
+                        set(at..m0, &|x| x.indent = true);
+                    }
+                    let ordered = p.number.is_some();
+                    match p.task {
+                        Some(done) => {
+                            if !ordered {
+                                set(m0..m0 + p.marker.len(), &|x| x.deco = DECO_TASK_DASH);
+                            }
+                            let b0 = m0 + p.marker.len();
+                            let kind = if done { DECO_TASK_DONE } else { DECO_TASK };
+                            set(b0..b0 + 3, &|x| x.deco = kind);
+                            if done {
+                                let end = text
+                                    .get(at + p.len..)
+                                    .and_then(|t| t.find('\n'))
+                                    .map_or(text.len(), |n| at + p.len + n);
+                                set(at + p.len..end, &|x| x.done = true);
+                            }
+                        }
+                        None if !ordered => set(m0..m0 + 1, &|x| x.deco = DECO_BULLET),
+                        None => {}
+                    }
                 }
             }
             Event::Start(Tag::Table(_)) => {
@@ -273,12 +344,19 @@ fn formats(text: &str) -> Vec<Fmt> {
                 for line in slice.split_inclusive('\n') {
                     let lead = line.len() - line.trim_start().len();
                     if line.trim_start().starts_with('>') {
-                        set(at + lead..at + lead + 1, &|x| x.marker = true);
+                        set(at + lead..at + lead + 1, &|x| {
+                            x.marker = true;
+                            x.deco = DECO_QUOTE;
+                        });
                     }
                     at += line.len();
                 }
             }
-            Event::Rule | Event::Html(_) | Event::InlineHtml(_) => set(r, &|x| x.marker = true),
+            Event::Rule => set(r, &|x| {
+                x.marker = true;
+                x.deco = DECO_RULE;
+            }),
+            Event::Html(_) | Event::InlineHtml(_) => set(r, &|x| x.marker = true),
             Event::Start(Tag::MetadataBlock(_)) => set(r, &|x| x.marker = true),
             _ => {}
         }
@@ -335,6 +413,14 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
         };
     }
     let size = s.size * if fmt.heading > 0 { heading_scale(fmt.heading) } else { 1.0 };
+    if fmt.concealed {
+        // Con su ancho (encima se dibuja la viñeta, la casilla o la barra), sin verse.
+        return TextFormat {
+            font_id: FontId::new(size, s.body_family.clone()),
+            color: Color32::TRANSPARENT,
+            ..Default::default()
+        };
+    }
     let family = if fmt.code {
         FontFamily::Monospace
     } else if fmt.bold || fmt.heading > 0 {
@@ -358,12 +444,20 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
     if fmt.code && !fmt.marker && fmt.syn != 0 {
         color = syntax_color(fmt.syn, s);
     }
+    if fmt.done && !fmt.marker {
+        color = s.muted;
+    }
     TextFormat {
         font_id: FontId::new(size, family),
         color,
         italics: fmt.italic || (fmt.quote && !fmt.marker) || (fmt.code && fmt.syn == highlight::COMMENT),
-        background: if fmt.code && !fmt.marker { s.code_bg } else { Color32::TRANSPARENT },
-        strikethrough: if fmt.strike && !fmt.marker { Stroke::new(1.0, s.text) } else { Stroke::NONE },
+        // El código en bloque va en una caja (la dibuja el campo), no tramo a tramo.
+        background: if fmt.code && !fmt.marker && !fmt.block_code { s.code_bg } else { Color32::TRANSPARENT },
+        strikethrough: if (fmt.strike || fmt.done) && !fmt.marker {
+            Stroke::new(1.0, if fmt.done { s.muted } else { s.text })
+        } else {
+            Stroke::NONE
+        },
         underline: if fmt.misspelled && !fmt.marker {
             Stroke::new(1.5, s.error)
         } else if fmt.link && !fmt.marker {
@@ -379,7 +473,7 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
 /// (bytes de la línea del cursor; `None` sin cursor) se ocultan: la negrita se ve como negrita y
 /// el enlace como enlace; en la línea donde se escribe se ven para poder borrarlas.
 pub fn layout_job(text: &str, s: &EditorStyle, wrap_width: f32, reveal: Option<std::ops::Range<usize>>) -> LayoutJob {
-    layout_job_spell(text, s, wrap_width, reveal, None, None)
+    layout_job_spell(text, s, wrap_width, reveal, None, None).0
 }
 
 /// Bytes que el corrector no revisa: código y marcas de Markdown.
@@ -396,7 +490,7 @@ pub(crate) fn layout_job_spell(
     reveal: Option<std::ops::Range<usize>>,
     spell: Option<&Speller>,
     typing: Option<usize>,
-) -> LayoutJob {
+) -> (LayoutJob, Vec<Deco>) {
     let mut f = formats(text);
     if let Some(sp) = spell {
         for r in sp.misspelled(text, |i| spell_skip(&f, i)) {
@@ -408,25 +502,57 @@ pub(crate) fn layout_job_spell(
             }
         }
     }
+    // Con el cursor en el bloque (`reveal`), las cercas del código se ven para editarlas; las
+    // viñetas, casillas y citas se dibujan siempre; la regla se ve como `---` en su línea.
+    let focused = reveal.is_some();
     for (i, x) in f.iter_mut().enumerate() {
-        x.hidden = x.inline && !reveal.as_ref().is_some_and(|r| r.contains(&i) || r.end == i);
+        let on_line = reveal.as_ref().is_some_and(|r| r.contains(&i) || r.end == i);
+        x.hidden = (x.inline && !on_line) || (x.deco == DECO_FENCE && !focused);
+        x.concealed = !x.hidden
+            && (matches!(x.deco, DECO_BULLET | DECO_TASK | DECO_TASK_DONE | DECO_QUOTE | DECO_TASK_DASH)
+                || (x.deco == DECO_RULE && !on_line));
+    }
+    // Las marcas que se dibujan, en tramos.
+    let mut decos: Vec<Deco> = Vec::new();
+    for (i, ch) in text.char_indices() {
+        let Some(x) = f.get(i) else { continue };
+        let draw = x.concealed || (x.deco == DECO_FENCE && !x.hidden);
+        // Los saltos de línea no se dibujan (una regla o una cerca los incluye).
+        if !draw || ch == '\n' {
+            continue;
+        }
+        let end = i + ch.len_utf8();
+        match decos.last_mut() {
+            Some(d) if d.kind == x.deco && d.end == i => d.end = end,
+            _ => {
+                let ls = text.get(..i).and_then(|b| b.rfind('\n')).map_or(0, |n| n + 1);
+                let indent = text.get(ls..i).map_or(0, |l| l.len() - l.trim_start_matches([' ', '>']).len());
+                decos.push(Deco { kind: x.deco, start: i, end, level: u8::try_from(indent / 2).unwrap_or(u8::MAX) });
+            }
+        }
     }
     let mut job = LayoutJob::default();
+    // La sangría de una lista anidada: cada nivel (dos espacios) se ve como 1,2 em.
+    let lead = |run: &str, fmt: Fmt| -> f32 {
+        if fmt.indent && !fmt.hidden { (run.len() as f32 / 2.0) * s.size * 0.9 } else { 0.0 }
+    };
     let mut start = 0usize;
     let mut cur = f.first().copied().unwrap_or_default();
     for (i, _) in text.char_indices().skip(1) {
         let here = f.get(i).copied().unwrap_or_default();
         if here != cur {
-            job.append(text.get(start..i).unwrap_or(""), 0.0, text_format(cur, s));
+            let run = text.get(start..i).unwrap_or("");
+            job.append(run, lead(run, cur), text_format(cur, s));
             start = i;
             cur = here;
         }
     }
     if start < text.len() || text.is_empty() {
-        job.append(text.get(start..).unwrap_or(""), 0.0, text_format(cur, s));
+        let run = text.get(start..).unwrap_or("");
+        job.append(run, lead(run, cur), text_format(cur, s));
     }
     job.wrap.max_width = wrap_width;
-    job
+    (job, decos)
 }
 
 /// Lo que pasó en el editor este cuadro.
@@ -585,6 +711,7 @@ pub(crate) fn field(
     // Caché del dibujo: si no cambian el texto, la línea del cursor, el ancho ni el estilo (lo
     // normal mientras el cursor parpadea o se desplaza la vista), no se vuelve a calcular.
     let cache_id = id.with("galley");
+    let deco_id = id.with("decos");
     let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| -> Arc<egui::Galley> {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -601,25 +728,159 @@ pub(crate) fn field(
         {
             return g;
         }
-        let g =
-            ui.fonts_mut(|f| f.layout_job(layout_job_spell(buf.as_str(), style, wrap, reveal.clone(), spell, typing)));
-        ui.data_mut(|d| d.insert_temp(cache_id, (key, Arc::clone(&g))));
+        let (job, decos) = layout_job_spell(buf.as_str(), style, wrap, reveal.clone(), spell, typing);
+        let g = ui.fonts_mut(|f| f.layout_job(job));
+        ui.data_mut(|d| {
+            d.insert_temp(cache_id, (key, Arc::clone(&g)));
+            d.insert_temp(deco_id, Arc::new(decos));
+        });
         g
+    };
+    // La caja del código va detrás del texto: se reserva su lugar antes de dibujarlo.
+    let code_bg = ui.painter().add(egui::Shape::Noop);
+    // Un bloque de código lleva margen dentro de su caja.
+    let t0 = text.trim_start();
+    let margin = if t0.starts_with("```") || t0.starts_with("~~~") {
+        egui::Margin::symmetric(12, 8)
+    } else {
+        egui::Margin::ZERO
     };
     let out = egui::TextEdit::multiline(text)
         .id(id)
+        .margin(margin)
+        .frame(egui::Frame::NONE.inner_margin(margin))
         .hint_text(hint)
         .desired_width(f32::INFINITY)
         .desired_rows(rows)
-        .frame(egui::Frame::NONE)
         .lock_focus(true)
         .layouter(&mut layouter)
         .show(ui);
     changed |= out.response.changed();
+    let decos = ui.data(|d| d.get_temp::<Arc<Vec<Deco>>>(deco_id)).unwrap_or_default();
+    let focused_now = ui.memory(|m| m.has_focus(id));
+    paint_decos(ui, &out, text, &decos, style, code_bg, focused_now);
+    // Clic en una casilla: se marca o desmarca (`[ ]` ↔ `[x]`, mismo largo: el cursor no se mueve).
+    if out.response.clicked()
+        && let Some(pp) = ui.input(|i| i.pointer.interact_pos())
+        && let Some(d) = decos
+            .iter()
+            .find(|d| matches!(d.kind, DECO_TASK | DECO_TASK_DONE) && task_rect(&out, text, d).expand(3.0).contains(pp))
+    {
+        let mark = if d.kind == DECO_TASK { "x" } else { " " };
+        if text.get(d.start + 1..d.start + 2).is_some()
+            && text.is_char_boundary(d.start + 1)
+            && text.is_char_boundary(d.start + 2)
+        {
+            text.replace_range(d.start + 1..d.start + 2, mark);
+            changed = true;
+        }
+    }
     if let Some(sp) = spell {
         changed |= spell_menu(ui, id, text, sp, &out);
     }
     (changed, out)
+}
+
+/// Columna de documento: ancho máximo del texto, en múltiplos del tamaño de letra (≈ 760 px a 15 px).
+pub(crate) const COLUMN_EMS: f32 = 52.0;
+
+/// Rectángulo (en pantalla) de los caracteres `[a, b)` de bytes de un renglón del campo.
+fn span_rect(out: &egui::text_edit::TextEditOutput, text: &str, a: usize, b: usize) -> egui::Rect {
+    let ca = text.get(..a).map_or(0, |t| t.chars().count());
+    let cb = text.get(..b).map_or(ca, |t| t.chars().count());
+    let ra = out.galley.pos_from_cursor(CCursor::new(ca));
+    let rb = out.galley.pos_from_cursor(CCursor::new(cb));
+    let x1 = if (rb.min.y - ra.min.y).abs() < 0.5 { rb.min.x } else { ra.max.x };
+    egui::Rect::from_min_max(ra.min, egui::pos2(x1.max(ra.min.x + 1.0), ra.max.y)).translate(out.galley_pos.to_vec2())
+}
+
+/// La casilla de una tarea (cuadrada, centrada en el `[ ]`).
+fn task_rect(out: &egui::text_edit::TextEditOutput, text: &str, d: &Deco) -> egui::Rect {
+    let r = span_rect(out, text, d.start, d.end);
+    let side = (r.height() * 0.66).clamp(10.0, 18.0);
+    egui::Rect::from_center_size(r.center(), egui::vec2(side, side))
+}
+
+/// Dibuja lo que las marcas ocultas representan: viñetas, casillas, la barra de las citas, la
+/// regla, y la caja del código (en `code_bg`, detrás del texto) con su lenguaje.
+fn paint_decos(
+    ui: &Ui,
+    out: &egui::text_edit::TextEditOutput,
+    text: &str,
+    decos: &[Deco],
+    s: &EditorStyle,
+    code_bg: egui::layers::ShapeIdx,
+    focused: bool,
+) {
+    let p = ui.painter();
+    let field = out.response.response.rect;
+    // Código en bloque: caja detrás de todo el campo y el lenguaje arriba a la derecha.
+    let t = text.trim_start();
+    if t.starts_with("```") || t.starts_with("~~~") {
+        let r = field;
+        p.set(code_bg, egui::Shape::rect_filled(r, 6.0, s.code_bg));
+        let lang: String =
+            t.trim_start_matches(['`', '~']).chars().take_while(|c| !c.is_whitespace()).take(24).collect();
+        if !focused && !lang.is_empty() {
+            p.text(
+                r.right_top() + egui::vec2(-8.0, 4.0),
+                egui::Align2::RIGHT_TOP,
+                lang,
+                FontId::proportional(s.size * 0.75),
+                s.muted,
+            );
+        }
+    }
+    let quotes: Vec<egui::Rect> =
+        decos.iter().filter(|d| d.kind == DECO_QUOTE).map(|d| span_rect(out, text, d.start, d.end)).collect();
+    for (k, r) in quotes.iter().enumerate() {
+        // La barra baja hasta la siguiente línea de la cita (o el final del campo): los renglones
+        // que se parten quedan dentro.
+        let bottom = quotes.get(k + 1).map_or(out.galley_pos.y + out.galley.size().y, |n| n.top());
+        let x = r.left() + 1.5;
+        p.line_segment(
+            [egui::pos2(x, r.top()), egui::pos2(x, bottom.max(r.bottom()))],
+            Stroke::new(3.0, s.muted.gamma_multiply(0.6)),
+        );
+    }
+    for d in decos {
+        match d.kind {
+            DECO_BULLET => {
+                let r = span_rect(out, text, d.start, d.end);
+                let c = egui::pos2(r.center().x, r.center().y);
+                let rad = (s.size * 0.17).max(2.0);
+                match d.level % 3 {
+                    0 => p.circle_filled(c, rad, s.text),
+                    1 => p.circle_stroke(c, rad, Stroke::new(1.2, s.text)),
+                    _ => p.rect_filled(egui::Rect::from_center_size(c, egui::vec2(rad * 1.7, rad * 1.7)), 0.0, s.text),
+                };
+            }
+            DECO_TASK | DECO_TASK_DONE => {
+                let r = task_rect(out, text, d);
+                if d.kind == DECO_TASK_DONE {
+                    p.rect_filled(r, 3.0, s.accent);
+                    let w = r.width();
+                    let pts = [
+                        r.left_top() + egui::vec2(w * 0.22, w * 0.52),
+                        r.left_top() + egui::vec2(w * 0.42, w * 0.72),
+                        r.left_top() + egui::vec2(w * 0.78, w * 0.3),
+                    ];
+                    p.line_segment([pts[0], pts[1]], Stroke::new(1.8, Color32::WHITE));
+                    p.line_segment([pts[1], pts[2]], Stroke::new(1.8, Color32::WHITE));
+                } else {
+                    p.rect_stroke(r, 3.0, Stroke::new(1.3, s.muted), egui::StrokeKind::Inside);
+                }
+            }
+            DECO_RULE => {
+                let r = span_rect(out, text, d.start, d.end);
+                p.line_segment(
+                    [egui::pos2(field.left(), r.center().y), egui::pos2(field.right(), r.center().y)],
+                    Stroke::new(1.0, s.muted.gamma_multiply(0.5)),
+                );
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Palabra mal escrita bajo el clic derecho: (bytes, palabra, sugerencias).
@@ -787,10 +1048,76 @@ mod tests {
         let job = layout_job(t, &s, 300.0, Some(0..11));
         assert!(!hidden(&job, "**dos"));
         assert!(hidden(&job, "**cuatro"));
-        assert!(!hidden(&job, "- lista"), "las viñetas siempre se ven");
+        // La viñeta se dibuja (su `-` queda invisible con su ancho), también en la línea del cursor.
+        assert!(hidden(&job, "- lista"), "la viñeta se dibuja, no se ve el guion");
         // Sin cursor: todas ocultas.
         let job = layout_job(t, &s, 300.0, None);
         assert!(hidden(&job, "**dos") && hidden(&job, "**cuatro"));
+    }
+
+    fn test_style() -> EditorStyle {
+        EditorStyle {
+            text: Color32::BLACK,
+            muted: Color32::GRAY,
+            accent: Color32::BLUE,
+            code_bg: Color32::LIGHT_GRAY,
+            size: 14.0,
+            bold_family: FontFamily::Proportional,
+            body_family: FontFamily::Proportional,
+            error: Color32::RED,
+            dark: false,
+        }
+    }
+
+    /// WYSIWYG: viñetas, casillas, citas, cercas y reglas son marcas dibujadas; el texto no cambia.
+    #[test]
+    fn block_marks_are_drawn_not_shown() {
+        let s = test_style();
+        let t = "- uno\n  - dos\n- [ ] tarea\n- [x] hecha\n\n> cita\n\n```rust\nfn f() {}\n```\n\n---\n\n1. numerada\n";
+        let (job, decos) = layout_job_spell(t, &s, 400.0, None, None, None);
+        let kinds = |k: u8| decos.iter().filter(|d| d.kind == k).count();
+        assert_eq!(kinds(DECO_BULLET), 2, "{decos:?}");
+        assert_eq!(kinds(DECO_TASK), 1);
+        assert_eq!(kinds(DECO_TASK_DONE), 1);
+        assert_eq!(kinds(DECO_QUOTE), 1);
+        assert_eq!(kinds(DECO_RULE), 1);
+        // La viñeta anidada es de nivel 1.
+        let nested = decos.iter().filter(|d| d.kind == DECO_BULLET).nth(1).copied();
+        assert_eq!(nested.map(|d| (d.level, t.get(d.start..d.end))), Some((1, Some("-"))));
+        // La casilla cubre `[ ]` / `[x]`.
+        let task = decos.iter().find(|d| d.kind == DECO_TASK_DONE).copied();
+        assert_eq!(task.and_then(|d| t.get(d.start..d.end)), Some("[x]"));
+        // Los números de una lista numerada se ven tal cual.
+        assert!(decos.iter().all(|d| !t.get(d.start..d.end).unwrap_or("").contains('1')));
+        // Sin el cursor en el bloque las cercas se pliegan (sin ancho); con él se ven.
+        let fence_hidden = |job: &LayoutJob| {
+            let at = t.find("```rust").unwrap_or(0);
+            job.sections
+                .iter()
+                .any(|x| x.byte_range.start.0 <= at && at < x.byte_range.end.0 && x.format.font_id.size < 1.0)
+        };
+        assert!(fence_hidden(&job));
+        let (job, decos) = layout_job_spell(t, &s, 400.0, Some(0..0), None, None);
+        assert!(!fence_hidden(&job), "con el cursor, las cercas se editan");
+        assert_eq!(decos.iter().filter(|d| d.kind == DECO_FENCE).count(), 2);
+        // La tarea hecha va tenue y tachada.
+        let done_fmt = formats(t).get(t.find("hecha").unwrap_or(0)).copied().unwrap_or_default();
+        assert!(done_fmt.done);
+        // Cubre cada byte (el texto no cambia).
+        let covered: usize = job.sections.iter().map(|x| x.byte_range.end.0 - x.byte_range.start.0).sum();
+        assert_eq!(covered, t.len());
+    }
+
+    /// Una lista dentro de una cita conserva su sangría (antes se comía los espacios).
+    #[test]
+    fn nested_lists_keep_their_indent() {
+        let f = formats("- a\n  - b\n");
+        assert!(f.get(4).is_some_and(|x| x.indent), "los dos espacios son sangría");
+        let f = formats("> - a\n>   - b\n");
+        let at = "> - a\n>".len();
+        assert!(f.get(at + 1).is_some_and(|x| x.indent), "sangría dentro de la cita");
+        let (job, _) = layout_job_spell("- a\n  - b\n", &test_style(), 400.0, None, None, None);
+        assert!(job.sections.iter().any(|x| x.leading_space > 5.0), "la sangría se ve más ancha");
     }
 
     #[test]
@@ -822,10 +1149,10 @@ mod tests {
                 x.byte_range.start.0 <= at && at < x.byte_range.end.0 && x.format.underline.color == Color32::RED
             })
         };
-        let job = layout_job_spell(t, &s, 300.0, None, Some(&sp), None);
+        let job = layout_job_spell(t, &s, 300.0, None, Some(&sp), None).0;
         assert!(red(&job, 6), "«holla» subrayada");
         assert!(!red(&job, 1) && !red(&job, 13), "bien escrita y dentro de código, no");
-        let job = layout_job_spell(t, &s, 300.0, None, Some(&sp), Some(10));
+        let job = layout_job_spell(t, &s, 300.0, None, Some(&sp), Some(10)).0;
         assert!(!red(&job, 6), "no mientras se teclea");
     }
 

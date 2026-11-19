@@ -83,6 +83,14 @@ pub(crate) struct Chunk {
     raw: bool,
 }
 
+/// Nivel del título con que empieza un bloque (`# …` a `###### …`); 0 si no es título.
+fn heading_level(content: &str) -> usize {
+    let t = content.trim_start_matches(' ');
+    let n = t.chars().take_while(|&c| c == '#').count();
+    let rest = t.get(n..).unwrap_or("");
+    if (1..=6).contains(&n) && (rest.is_empty() || rest.starts_with([' ', '\t'])) { n } else { 0 }
+}
+
 /// Texto y espacio final de un trozo: el texto acaba al final de la línea de su último carácter
 /// visible (los espacios de esa línea, que pueden ser un salto forzado, se quedan).
 fn split_ws(piece: &str) -> (String, String) {
@@ -826,12 +834,17 @@ pub struct Hooks {
     pub spell: Option<Arc<crate::Speller>>,
     /// Dónde guardar las imágenes pegadas o soltadas sobre el editor.
     pub images: Option<Arc<dyn crate::ImageStore>>,
+    /// Zoom del documento (1.0 = la letra del tema); se acota a 50 %–300 %.
+    pub zoom: Option<f32>,
 }
 
 /// Como [`show`], con los ganchos de la app.
 pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hooks) -> Output {
     let diagrams = hooks.diagrams.clone();
-    let style = EditorStyle::from_ui(ui);
+    let mut style = EditorStyle::from_ui(ui);
+    if let Some(z) = hooks.zoom.filter(|z| z.is_finite()) {
+        style.size *= z.clamp(crate::ZOOM_MIN, crate::ZOOM_MAX);
+    }
     let skey = style_key(&style);
     let h = hash_str(text);
     let mut st = ui.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
@@ -1053,8 +1066,10 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
     let select_uid = st.select.map(|x| x.0);
     let shift = ui.input(|i| i.modifiers.shift);
     let pointer_busy = ui.input(|i| i.pointer.any_down() || i.pointer.any_released());
-    let row_h = (style.size * 1.35).max(1.0);
-    let gap = (style.size * 0.6).round();
+    let row_h = (style.size * crate::LINE_SPACING).max(1.0);
+    let gap = (style.size * 0.75).round();
+    // Antes de un título, más aire (como en un documento): un título va con lo que le sigue.
+    let heading_gap = (style.size * 0.9).round();
     let mut act: Option<Act> = None;
     let mut active = false;
     let mut resp: Option<egui::Response> = None;
@@ -1081,13 +1096,18 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                 let only = st.blocks.chunks.len() == 1;
                 for i in 0..st.blocks.chunks.len() {
                     let pending = st.focus;
+                    let before_heading =
+                        st.blocks.chunks.get(i.saturating_add(1)).is_some_and(|n| heading_level(&n.content) > 0);
                     let Some(c) = st.blocks.chunks.get_mut(i) else { break };
                     if (c.width - width).abs() >= 1.0 {
                         c.height = estimate(&c.content, row_h, width, style.size);
                         c.width = width;
                     }
                     let fid = id.with(("block", c.uid));
-                    let g = if c.born || c.sep.matches('\n').count() >= 2 { gap } else { 0.0 };
+                    let mut g = if c.born || c.sep.matches('\n').count() >= 2 { gap } else { 0.0 };
+                    if before_heading && g > 0.0 {
+                        g += heading_gap;
+                    }
                     let wanted = pending.and_then(|(u, at)| (u == c.uid).then_some(at));
                     let focused = ui.memory(|m| m.has_focus(fid));
                     active |= focused || wanted.is_some();
@@ -1653,6 +1673,16 @@ pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: Exte
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn heading_levels_follow_markdown() {
+        assert_eq!(super::heading_level("# Uno"), 1);
+        assert_eq!(super::heading_level("### Tres\ntexto"), 3);
+        assert_eq!(super::heading_level("#"), 1);
+        assert_eq!(super::heading_level("#etiqueta"), 0);
+        assert_eq!(super::heading_level("####### siete"), 0);
+        assert_eq!(super::heading_level("texto"), 0);
+    }
+
     use super::*;
     use proptest::prelude::*;
 

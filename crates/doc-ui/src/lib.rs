@@ -392,13 +392,29 @@ fn syntax_color(class: u8, s: &EditorStyle) -> Color32 {
     }
 }
 
+/// Interlineado del cuerpo, como factor del tamaño de la letra (el de un documento, no el de
+/// una etiqueta de la interfaz).
+pub(crate) const LINE_SPACING: f32 = 1.5;
+
+/// Interlineado de una línea con este formato y tamaño (los títulos y el código, más apretados).
+fn line_height(fmt: Fmt, size: f32) -> Option<f32> {
+    let k = if fmt.heading > 0 {
+        1.25
+    } else if fmt.code {
+        1.35
+    } else {
+        LINE_SPACING
+    };
+    Some((size * k).round())
+}
+
 /// Factor de tamaño de un título.
 fn heading_scale(level: u8) -> f32 {
     match level {
-        1 => 1.6,
-        2 => 1.35,
-        3 => 1.18,
-        4 => 1.06,
+        1 => 1.9,
+        2 => 1.5,
+        3 => 1.25,
+        4 => 1.1,
         _ => 1.0,
     }
 }
@@ -417,6 +433,7 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
         // Con su ancho (encima se dibuja la viñeta, la casilla o la barra), sin verse.
         return TextFormat {
             font_id: FontId::new(size, s.body_family.clone()),
+            line_height: line_height(fmt, size),
             color: Color32::TRANSPARENT,
             ..Default::default()
         };
@@ -449,6 +466,7 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
     }
     TextFormat {
         font_id: FontId::new(size, family),
+        line_height: line_height(fmt, size),
         color,
         italics: fmt.italic || (fmt.quote && !fmt.marker) || (fmt.code && fmt.syn == highlight::COMMENT),
         // El código en bloque va en una caja (la dibuja el campo), no tramo a tramo.
@@ -784,6 +802,26 @@ pub(crate) fn field(
 /// Columna de documento: ancho máximo del texto, en múltiplos del tamaño de letra (≈ 760 px a 15 px).
 pub(crate) const COLUMN_EMS: f32 = 52.0;
 
+/// Zoom mínimo del documento ([`Hooks::zoom`]).
+pub const ZOOM_MIN: f32 = 0.5;
+/// Zoom máximo del documento.
+pub const ZOOM_MAX: f32 = 3.0;
+/// Pasos de zoom de las apps (los de un navegador o un procesador de textos).
+const ZOOM_STEPS: [f32; 13] = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+
+/// El paso de zoom siguiente (`up`) o anterior a `current`; con un valor raro, vuelve al 100 %.
+pub fn zoom_step(current: f32, up: bool) -> f32 {
+    if !current.is_finite() {
+        return 1.0;
+    }
+    let found = if up {
+        ZOOM_STEPS.iter().copied().find(|&z| z > current + 0.001)
+    } else {
+        ZOOM_STEPS.iter().rev().copied().find(|&z| z < current - 0.001)
+    };
+    found.unwrap_or(current.clamp(ZOOM_MIN, ZOOM_MAX))
+}
+
 /// Rectángulo (en pantalla) de los caracteres `[a, b)` de bytes de un renglón del campo.
 fn span_rect(out: &egui::text_edit::TextEditOutput, text: &str, a: usize, b: usize) -> egui::Rect {
     let ca = text.get(..a).map_or(0, |t| t.chars().count());
@@ -940,6 +978,17 @@ pub(crate) fn cached_galley(ui: &Ui, id: Id) -> Option<Arc<egui::Galley>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn zoom_steps_stop_at_the_limits() {
+        assert!((super::zoom_step(1.0, true) - 1.1).abs() < 1e-6);
+        assert!((super::zoom_step(1.0, false) - 0.9).abs() < 1e-6);
+        assert!((super::zoom_step(1.05, true) - 1.1).abs() < 1e-6);
+        assert!((super::zoom_step(3.0, true) - 3.0).abs() < 1e-6);
+        assert!((super::zoom_step(0.5, false) - 0.5).abs() < 1e-6);
+        assert!((super::zoom_step(f32::NAN, true) - 1.0).abs() < 1e-6);
+        assert!((super::zoom_step(9.0, true) - 3.0).abs() < 1e-6);
+    }
+
     use super::*;
 
     fn fmt_at(text: &str, needle: &str) -> Fmt {

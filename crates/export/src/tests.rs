@@ -223,3 +223,57 @@ proptest! {
         prop_assert!(balanced(&d).is_ok(), "{:?}", balanced(&d));
     }
 }
+
+#[cfg(feature = "pdf")]
+mod pdf_tests {
+    use super::*;
+
+    #[test]
+    fn pdf_is_made_with_everything() {
+        let doc = Document::parse(SAMPLE);
+        let bytes = pdf::pdf(&doc, &Fake, &Options::default()).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+        assert!(bytes.len() > 5_000);
+        // Sin recursos también (diagrama como código).
+        assert!(pdf::pdf(&doc, &NoResources, &Options { paper: Paper::A4, ..Options::default() }).is_ok());
+    }
+
+    #[test]
+    fn document_text_is_never_typst_code() {
+        // Texto que en Typst sería código, marcado o lo rompería.
+        let md = "# #set page(width: 1pt) \\\" ]\n\n#import \"x\": * $x$ `#panic()` @ref <label> = no\n\n\
+                  - #{ while true {} }\n\n| #eval(\"1\") | \\ |\n|---|---|\n";
+        let (src, _) = pdf::typst_source(&Document::parse(md), &NoResources, &Options::default(), true);
+        // El título del documento llega como cadena, no como `#set`.
+        assert!(src.contains("heading(level: 1, { \"#set page(width: 1pt) \\\" ]\" })"), "{src}");
+        assert!(pdf::pdf(&Document::parse(md), &NoResources, &Options::default()).is_ok());
+    }
+
+    #[test]
+    fn damaged_images_fall_back_to_text() {
+        struct Broken;
+        impl Resources for Broken {
+            fn image(&self, _src: &str) -> Option<Picture> {
+                // Cabecera PNG válida, cuerpo roto.
+                let mut b = png(8, 8);
+                b.truncate(40);
+                Some(Picture { bytes: b, mime: "image/png".into(), width: 8, height: 8 })
+            }
+            fn diagram(&self, _block: &str) -> Option<Diagram> {
+                None
+            }
+        }
+        let doc = Document::parse("Hola\n\n![rota](x.png)\n");
+        assert!(pdf::pdf(&doc, &Broken, &Options::default()).unwrap().starts_with(b"%PDF-"));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+
+        #[test]
+        fn any_text_makes_a_pdf(md in "(\\PC|[#*_`>|\\[\\]()!$~\\-\\n 1.\"\\\\{}])*") {
+            let r = pdf::pdf(&Document::parse(&md), &NoResources, &Options::default());
+            prop_assert!(r.is_ok(), "{:?}", r.err());
+        }
+    }
+}

@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/doc", "crates/doc-ui", "crates/export", "xtask"]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
@@ -33,6 +33,12 @@ syntect = { version = "5.3", default-features = false, features = ["default-synt
 # Exportar a DOCX: un DOCX es un ZIP; deflate con flate2 y miniz_oxide (Rust puro, sin zlib ni
 # bzip2/zstd en C).
 zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
+# Exportar a PDF (característica `pdf` de iure-doc-export): Typst compilado aquí, con sus letras
+# incluidas (Libertinus, New Computer Modern, DejaVu Sans Mono; OFL/libres); Rust puro.
+typst = "0.15.1"
+typst-pdf = "0.15.1"
+typst-layout = "0.15.1"
+typst-assets = { version = "0.15.1", features = ["fonts"] }
 # pruebas
 proptest = "1"
 tempfile = "3"

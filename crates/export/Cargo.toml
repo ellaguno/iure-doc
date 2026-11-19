@@ -12,6 +12,14 @@ iure-doc.workspace = true
 pulldown-cmark.workspace = true
 image.workspace = true
 zip.workspace = true
+typst = { workspace = true, optional = true }
+typst-pdf = { workspace = true, optional = true }
+typst-layout = { workspace = true, optional = true }
+typst-assets = { workspace = true, optional = true }
+
+[features]
+# PDF con Typst (pesado de compilar: solo lo pide quien exporta a PDF).
+pdf = ["dep:typst", "dep:typst-pdf", "dep:typst-layout", "dep:typst-assets"]
 
 [dev-dependencies]
 proptest.workspace = true

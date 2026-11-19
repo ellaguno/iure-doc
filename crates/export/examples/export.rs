@@ -1,5 +1,5 @@
 //! Exporta un Markdown a HTML y DOCX junto a él (imágenes de su carpeta, sin diagramas):
-//! `cargo run -p iure-doc-export --example export -- nota.md [--a4]`.
+//! `cargo run -p iure-doc-export --example export [--features pdf] -- nota.md [--a4]`.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -12,6 +12,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opts = iure_doc_export::Options { paper, ..Default::default() };
     std::fs::write(path.with_extension("html"), iure_doc_export::html::html(&doc, &res, &opts))?;
     std::fs::write(path.with_extension("docx"), iure_doc_export::docx::docx(&doc, &res, &opts)?)?;
-    eprintln!("{} → .html y .docx", path.display());
+    #[cfg(feature = "pdf")]
+    std::fs::write(path.with_extension("pdf"), iure_doc_export::pdf::pdf(&doc, &res, &opts)?)?;
+    eprintln!("{} → .html, .docx (y .pdf con --features pdf)", path.display());
     Ok(())
 }

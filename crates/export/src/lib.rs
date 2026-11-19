@@ -6,6 +6,7 @@
 //! - [`docx`]: un documento de Word (WordprocessingML escrito aquí, empaquetado con `zip`): títulos
 //!   con estilos de Word (el índice de Word los reconoce), listas numeradas de verdad, tablas,
 //!   imágenes y diagramas como imágenes.
+//! - `pdf` (característica `pdf`): PDF con Typst compilado aquí y sus letras incluidas.
 //!
 //! Imágenes y diagramas los pone la app con [`Resources`]: el exportador no lee nada por su cuenta.
 //! [`FolderResources`] da las imágenes locales con la misma política que el editor (solo dentro de
@@ -24,6 +25,8 @@
 
 pub mod docx;
 pub mod html;
+#[cfg(feature = "pdf")]
+pub mod pdf;
 mod text;
 
 use std::path::{Component, Path, PathBuf};

@@ -52,8 +52,8 @@ mod span;
 pub mod spell;
 mod table_ui;
 pub use blocks::{
-    ExternalEdit, Hooks, apply_external, caret_offset, show as show_blocks, show_hooks as show_blocks_hooks,
-    show_with as show_blocks_with,
+    ExternalEdit, Hooks, apply_external, caret_offset, focus_offset, show as show_blocks,
+    show_hooks as show_blocks_hooks, show_with as show_blocks_with,
 };
 pub use diagrams::{DiagramImage, DiagramRenderer};
 pub use highlight::wait_ready as wait_highlighting;

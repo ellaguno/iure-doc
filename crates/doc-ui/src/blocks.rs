@@ -1495,6 +1495,24 @@ pub enum ExternalEdit {
 /// Aplica `edit` en el cursor (o la selección) del editor `id` —el último que tuvo; sin cursor, al
 /// final—, como si se hubiera tecleado: un paso de deshacer y el cursor queda después (la selección
 /// sigue puesta al dar formato). `true` si cambió el texto.
+/// Lleva el cursor del editor `id` al carácter `at` del documento (y lo muestra): el esquema de una
+/// app, un resultado de búsqueda.
+pub fn focus_offset(ctx: &egui::Context, id: Id, text: &str, at: usize) {
+    let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
+    let h = hash_str(text);
+    if st.hash != h || st.blocks.chunks.is_empty() {
+        st.blocks = Blocks::new(text);
+        st.hash = h;
+        st.history.clear();
+    }
+    let f = st.blocks.at_offset(at.min(text.chars().count()));
+    st.caret = Some(f);
+    st.anchor = Some(f);
+    st.focus = Some(f);
+    ctx.data_mut(|d| d.insert_temp(id, st));
+    ctx.request_repaint();
+}
+
 /// Dónde está el cursor del editor `id` (carácter del documento), si tuvo uno.
 pub fn caret_offset(ctx: &egui::Context, id: Id, text: &str) -> Option<usize> {
     let st = ctx.data(|d| d.get_temp::<State>(id))?;

@@ -51,7 +51,10 @@ mod paste;
 mod span;
 pub mod spell;
 mod table_ui;
-pub use blocks::{Hooks, show as show_blocks, show_hooks as show_blocks_hooks, show_with as show_blocks_with};
+pub use blocks::{
+    ExternalEdit, Hooks, apply_external, show as show_blocks, show_hooks as show_blocks_hooks,
+    show_with as show_blocks_with,
+};
 pub use diagrams::{DiagramImage, DiagramRenderer};
 pub use highlight::wait_ready as wait_highlighting;
 pub use image_store::{FolderImages, ImageStore, PastedImage};

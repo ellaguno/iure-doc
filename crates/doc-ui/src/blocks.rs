@@ -1449,6 +1449,84 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
     Output { changed, response }
 }
 
+/// Una edición que llega de fuera del editor (dictado por voz con IureVoz, enlaces
+/// `iureditor://insert` y `iureditor://edit`), aunque la ventana no tenga el foco.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExternalEdit {
+    /// Escribe el texto en el cursor.
+    Insert(String),
+    /// Borra la palabra antes del cursor.
+    DeleteWord,
+    /// Borra la línea del cursor.
+    DeleteLine,
+    /// Deshace el último paso.
+    Undo,
+}
+
+/// Aplica `edit` en el cursor del editor `id` (el último que tuvo; sin cursor, al final), como si
+/// se hubiera tecleado: un paso de deshacer y el cursor queda después. `true` si cambió el texto.
+pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: ExternalEdit) -> bool {
+    let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
+    let h = hash_str(text);
+    if st.hash != h || st.blocks.chunks.is_empty() {
+        st.blocks = Blocks::new(text);
+        st.hash = h;
+        st.caret = None;
+        st.history.clear();
+    }
+    let total = text.chars().count();
+    let caret = st.caret.map_or(total, |(uid, pos)| st.blocks.offset_of(uid).saturating_add(pos)).min(total);
+    let byte = |chars: usize, t: &str| t.char_indices().nth(chars).map_or(t.len(), |(b, _)| b);
+    let before = text.clone();
+    let now = ctx.input(|i| i.time);
+    let at = byte(caret, text);
+    let undo = edit == ExternalEdit::Undo;
+    let new_caret = match edit {
+        ExternalEdit::Insert(ins) => {
+            let ins: String = ins.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
+            if ins.is_empty() {
+                None
+            } else {
+                text.insert_str(at, &ins);
+                Some(caret + ins.chars().count())
+            }
+        }
+        ExternalEdit::DeleteWord => {
+            let head = text.get(..at).unwrap_or_default();
+            let trimmed = head.trim_end_matches([' ', '\t']);
+            let start =
+                trimmed.char_indices().rev().find(|(_, c)| c.is_whitespace()).map_or(0, |(b, c)| b + c.len_utf8());
+            (start < at).then(|| {
+                text.replace_range(start..at, "");
+                text.get(..start).map_or(0, |p| p.chars().count())
+            })
+        }
+        ExternalEdit::DeleteLine => {
+            let start = text.get(..at).and_then(|p| p.rfind('\n')).map_or(0, |b| b + 1);
+            let end = text.get(at..).and_then(|r| r.find('\n')).map_or(text.len(), |b| at + b + 1);
+            (start < end).then(|| {
+                text.replace_range(start..end, "");
+                text.get(..start).map_or(0, |p| p.chars().count())
+            })
+        }
+        ExternalEdit::Undo => st.history.undo(text).map(|b| text.get(..b).map_or(0, |p| p.chars().count())),
+    };
+    let changed = new_caret.is_some();
+    if let Some(c) = new_caret {
+        if *text != before && !undo {
+            st.history.record(&before, text, now);
+        }
+        st.blocks = Blocks::new(text);
+        st.hash = hash_str(text);
+        let f = st.blocks.at_offset(c);
+        st.caret = Some(f);
+        st.focus = Some(f);
+        ctx.request_repaint();
+    }
+    ctx.data_mut(|d| d.insert_temp(id, st));
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1456,6 +1534,37 @@ mod tests {
 
     fn contents(b: &Blocks) -> Vec<&str> {
         b.chunks.iter().map(|c| c.content.as_str()).collect()
+    }
+
+    /// Dictado por voz (IureVoz): escribir y borrar en el cursor sin que la ventana tenga el foco.
+    #[test]
+    fn external_edits_go_to_the_caret_and_undo() {
+        let ctx = egui::Context::default();
+        let id = Id::unique("externo");
+        let mut text = "Hola mundo\nsegunda línea\n".to_string();
+        // Sin cursor: al final.
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Insert(" X".into())));
+        assert_eq!(text, "Hola mundo\nsegunda línea\n X");
+        // Con cursor después de «Hola».
+        let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
+        st.caret = Some(st.blocks.at_offset(4));
+        ctx.data_mut(|d| d.insert_temp(id, st));
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Insert(",\u{7}".into())));
+        assert_eq!(text, "Hola, mundo\nsegunda línea\n X", "sin caracteres de control");
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::DeleteWord));
+        assert_eq!(text, " mundo\nsegunda línea\n X");
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::DeleteLine));
+        assert_eq!(text, "segunda línea\n X");
+        assert!(!apply_external(&ctx, id, &mut text, ExternalEdit::Insert(String::new())));
+        for _ in 0..3 {
+            assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Undo));
+        }
+        assert_eq!(text, "Hola mundo\nsegunda línea\n X");
+        // Si el anfitrión cambió el texto, la historia anterior no se aplica.
+        text = "otro".into();
+        assert!(!apply_external(&ctx, id, &mut text, ExternalEdit::Undo));
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::DeleteWord));
+        assert_eq!(text, "");
     }
 
     #[test]

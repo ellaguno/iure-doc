@@ -10,6 +10,13 @@ El documento de la suite Iurefficient, **100 % en Rust**:
   campo (notas cortas); `show_blocks` es el editor por bloques para documentos largos (~1 ms por
   tecla con 100 páginas), con deshacer de todo el documento, selección que cruza bloques tablas editables en su lugar (`table`: cuadrícula sin pérdidas para lo que no se toca) y diagramas dibujados en su lugar (`show_blocks_with` con un `DiagramRenderer` de la app: el editor no dibuja, la app sí) e imágenes locales en su lugar (`LocalImages`, solo dentro de la carpeta del documento; `Renderers` junta dibujantes); pegar HTML como Markdown (`iure_doc::html`, y en el editor con `Hooks { paste: Some(SystemClipboard) }`) y corrector ortográfico (`Speller`, diccionarios Hunspell del sistema con `spellbook`; `Hooks { spell }`).
 
+- **`iure-doc-export`** (sin egui): exportar a **HTML autocontenido** (`html::html`: estilos dentro,
+  imágenes en `data:`, diagramas en SVG; el HTML del documento se exporta como texto) y a **DOCX**
+  (`docx::docx`: WordprocessingML propio con estilos de título de Word, numeración real, tablas,
+  imágenes y diagramas; WebP pasa a PNG). Imágenes y diagramas los da la app con `Resources`
+  (`FolderResources`: imágenes de la carpeta del documento). Para probar:
+  `cargo run -p iure-doc-export --example export -- nota.md [--a4]`.
+
 Lo usan IureDesk (notas), IureProject (notas de tareas) e IureEditor 2.0. El plan está en
 [`iuredesk/docs/suite-integracion.md`](https://github.com/ellaguno/iuredesk/blob/main/docs/suite-integracion.md)
 §4.5–4.7 (tareas S1.11–S1.17).
@@ -17,7 +24,7 @@ Lo usan IureDesk (notas), IureProject (notas de tareas) e IureEditor 2.0. El pla
 ## Usarlo
 
 ```toml
-iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.11.0" }
+iure-doc-ui = { git = "https://github.com/ellaguno/iure-doc", tag = "v0.12.0" }
 ```
 
 Para trabajar a la vez en este repositorio y en una app, sin publicar una etiqueta, en la app

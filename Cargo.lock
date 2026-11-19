@@ -931,7 +931,7 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
 name = "iure-doc"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "html5ever",
  "proptest",
@@ -940,8 +940,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "iure-doc-export"
+version = "0.12.0"
+dependencies = [
+ "image",
+ "iure-doc",
+ "proptest",
+ "pulldown-cmark",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
 name = "iure-doc-ui"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arboard",
  "egui",
@@ -1931,6 +1943,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54ec2755506471f54baf5e4bb5499d8e510cc1caf271270e778a736bd2d7336c"
+
+[[package]]
 name = "uds_windows"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2244,7 +2262,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "xtask"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "zbus"
@@ -2334,6 +2352,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "zip"
+version = "8.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "typed-path",
 ]
 
 [[package]]

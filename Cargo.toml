@@ -2,10 +2,10 @@
 # y su editor para egui (`iure-doc-ui`, DocEditor). Lo usan IureDesk, IureProject e IureEditor 2.0.
 [workspace]
 resolver = "3"
-members = ["crates/doc", "crates/doc-ui", "xtask"]
+members = ["crates/doc", "crates/doc-ui", "crates/export", "xtask"]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
@@ -30,6 +30,9 @@ spellbook = "0.4"
 # Resaltado de sintaxis de los bloques de código: gramáticas de Sublime con fancy-regex (Rust puro,
 # sin Oniguruma) y sin temas (los colores son los del tema de la suite).
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
+# Exportar a DOCX: un DOCX es un ZIP; deflate con flate2 y miniz_oxide (Rust puro, sin zlib ni
+# bzip2/zstd en C).
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 # pruebas
 proptest = "1"
 tempfile = "3"

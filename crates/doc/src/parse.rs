@@ -288,11 +288,23 @@ fn read_block(it: &mut Events<'_>, tag: Tag<'_>) -> Option<Block> {
                             checked = Some(*c);
                             it.next();
                         }
-                        // En una lista «suelta» cada elemento empieza con un párrafo.
+                        // En una lista «suelta» cada elemento empieza con un párrafo, y la casilla
+                        // (`- [x]`) llega dentro de él.
+                        let mut first = None;
                         if matches!(it.peek(), Some(Event::Start(Tag::Paragraph))) {
                             tight = false;
+                            it.next();
+                            if checked.is_none()
+                                && let Some(Event::TaskListMarker(c)) = it.peek()
+                            {
+                                checked = Some(*c);
+                                it.next();
+                            }
+                            first = read_block(it, Tag::Paragraph);
                         }
-                        items.push(Item { checked, blocks: read_blocks(it, Some(&TagEnd::Item)) });
+                        let mut blocks: Vec<Block> = first.into_iter().collect();
+                        blocks.extend(read_blocks(it, Some(&TagEnd::Item)));
+                        items.push(Item { checked, blocks });
                     }
                     _ => {}
                 }

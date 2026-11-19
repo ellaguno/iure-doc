@@ -1,0 +1,21 @@
+[package]
+name = "iure-doc-export"
+description = "Exportar documentos de la suite Iurefficient: HTML autocontenido y DOCX (Rust puro, sin egui)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+iure-doc.workspace = true
+pulldown-cmark.workspace = true
+image.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

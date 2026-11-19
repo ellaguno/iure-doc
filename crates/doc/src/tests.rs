@@ -198,3 +198,24 @@ proptest! {
         prop_assert_eq!(d2.to_markdown(), once);
     }
 }
+
+/// Regresión: en una lista «suelta» (con líneas en blanco) la casilla llega dentro del párrafo y se
+/// perdía (al reescribir el bloque, `- [x]` pasaba a `-`).
+#[test]
+fn loose_task_lists_keep_their_boxes() {
+    let md = "- [x] hecho\n\n- [ ] por hacer\n\n  más texto\n";
+    let mut doc = Document::parse(md);
+    let Some(Block::List { tight, items, .. }) = doc.nodes().first().map(|n| n.block.clone()) else {
+        panic!("no es una lista")
+    };
+    assert!(!tight);
+    assert_eq!(items.iter().map(|i| i.checked).collect::<Vec<_>>(), [Some(true), Some(false)]);
+    assert_eq!(items.get(1).map(|i| i.blocks.len()), Some(2), "el segundo párrafo sigue en el elemento");
+    assert!(
+        matches!(items.first().and_then(|i| i.blocks.first()), Some(Block::Paragraph(c)) if c == &[Inline::text("hecho")])
+    );
+    // Reescrito desde el modelo, conserva las casillas.
+    doc.set(0, Block::List { ordered: false, start: 1, tight: false, items });
+    let out = doc.to_markdown();
+    assert!(out.contains("- [x] hecho") && out.contains("- [ ] por hacer"), "{out}");
+}

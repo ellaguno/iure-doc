@@ -342,6 +342,8 @@ struct State {
     /// Cursor del bloque con el foco (bloque, posición) cuando no había botón pulsado: de ahí
     /// parte Mayús+clic en otro bloque.
     caret: Option<Focus>,
+    /// El otro extremo de la selección del bloque con el foco (para la barra de formato).
+    anchor: Option<Focus>,
     /// Celda activa de una tabla (bloque, fila, columna): su barra se ve.
     cell: Option<(u64, usize, usize)>,
     /// Celda que toma el foco cuando se dibuje.
@@ -1380,6 +1382,8 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                     }
                     if focused && !pointer_busy {
                         st.caret = Some((uid, primary));
+                        let secondary = out.state.cursor.char_range().map_or(primary, |x| x.secondary.index.0);
+                        st.anchor = Some((uid, secondary));
                     }
                     placed.push((i, out.galley_pos, Arc::clone(&out.galley)));
                     if wanted.is_some() {
@@ -1475,10 +1479,31 @@ pub enum ExternalEdit {
     DeleteLine,
     /// Deshace el último paso.
     Undo,
+    /// Rehace.
+    Redo,
+    /// Pone o quita marcas alrededor de la selección (`**` negrita, `*` cursiva, `~~` tachado,
+    /// `` ` `` código); sin selección deja el cursor entre ellas.
+    Wrap(String),
+    /// Tipo de las líneas de la selección (título, viñeta, numerada, tarea); otra vez, lo quita.
+    Line(edit::LineKind),
+    /// Cita (`> `) en las líneas de la selección; si ya lo son, la quita.
+    Quote,
+    /// `[selección](url)`.
+    Link,
 }
 
-/// Aplica `edit` en el cursor del editor `id` (el último que tuvo; sin cursor, al final), como si
-/// se hubiera tecleado: un paso de deshacer y el cursor queda después. `true` si cambió el texto.
+/// Aplica `edit` en el cursor (o la selección) del editor `id` —el último que tuvo; sin cursor, al
+/// final—, como si se hubiera tecleado: un paso de deshacer y el cursor queda después (la selección
+/// sigue puesta al dar formato). `true` si cambió el texto.
+/// Dónde está el cursor del editor `id` (carácter del documento), si tuvo uno.
+pub fn caret_offset(ctx: &egui::Context, id: Id, text: &str) -> Option<usize> {
+    let st = ctx.data(|d| d.get_temp::<State>(id))?;
+    if st.hash != hash_str(text) {
+        return None;
+    }
+    st.caret.map(|(uid, pos)| st.blocks.offset_of(uid).saturating_add(pos))
+}
+
 pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: ExternalEdit) -> bool {
     let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
     let h = hash_str(text);
@@ -1489,12 +1514,24 @@ pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: Exte
         st.history.clear();
     }
     let total = text.chars().count();
-    let caret = st.caret.map_or(total, |(uid, pos)| st.blocks.offset_of(uid).saturating_add(pos)).min(total);
+    // Sin cursor: escribir va al final; dar formato, a la última línea con texto.
+    let formatting =
+        matches!(edit, ExternalEdit::Wrap(_) | ExternalEdit::Line(_) | ExternalEdit::Quote | ExternalEdit::Link);
+    let fallback = if formatting { text.trim_end_matches(['\n', '\r']).chars().count() } else { total };
+    let caret = st.caret.map_or(fallback, |(uid, pos)| st.blocks.offset_of(uid).saturating_add(pos)).min(total);
+    let anchor = st
+        .anchor
+        .filter(|a| st.caret.is_some_and(|c| c.0 == a.0))
+        .map_or(caret, |(uid, pos)| st.blocks.offset_of(uid).saturating_add(pos))
+        .min(total);
+    let (lo, hi) = (caret.min(anchor), caret.max(anchor));
+    // Selección que dejar puesta tras la edición (caracteres del documento).
+    let mut keep: Option<(usize, usize)> = None;
     let byte = |chars: usize, t: &str| t.char_indices().nth(chars).map_or(t.len(), |(b, _)| b);
     let before = text.clone();
     let now = ctx.input(|i| i.time);
     let at = byte(caret, text);
-    let undo = edit == ExternalEdit::Undo;
+    let undo = matches!(edit, ExternalEdit::Undo | ExternalEdit::Redo);
     let new_caret = match edit {
         ExternalEdit::Insert(ins) => {
             let ins: String = ins.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
@@ -1524,6 +1561,51 @@ pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: Exte
             })
         }
         ExternalEdit::Undo => st.history.undo(text).map(|b| text.get(..b).map_or(0, |p| p.chars().count())),
+        ExternalEdit::Redo => st.history.redo(text).map(|b| text.get(..b).map_or(0, |p| p.chars().count())),
+        ExternalEdit::Wrap(mark) => {
+            let e = edit::toggle_wrap(text, lo, hi, &mark);
+            keep = Some((e.sel_start, e.sel_end));
+            (e.text != *text).then(|| {
+                *text = e.text;
+                e.sel_end
+            })
+        }
+        ExternalEdit::Line(kind) => edit::set_line_kind(text, lo, hi, kind).map(|e| {
+            keep = Some((e.sel_start, e.sel_end));
+            *text = e.text;
+            e.sel_end
+        }),
+        ExternalEdit::Link => {
+            let e = edit::link(text, lo, hi);
+            keep = Some((e.sel_start, e.sel_end));
+            (e.text != *text).then(|| {
+                *text = e.text;
+                e.sel_end
+            })
+        }
+        ExternalEdit::Quote => {
+            // Las líneas que toca la selección: si todas son cita, se quita `> `; si no, se pone.
+            let lb = byte(lo, text);
+            let hb = byte(hi, text);
+            let start = text.get(..lb).and_then(|p| p.rfind('\n')).map_or(0, |b| b + 1);
+            let end = text.get(hb..).and_then(|r| r.find('\n')).map_or(text.len(), |b| hb + b);
+            let region = text.get(start..end).unwrap_or_default().to_string();
+            let all = region.lines().all(|l| l.trim_start().starts_with('>'));
+            let new: Vec<String> = region
+                .split('\n')
+                .map(|l| {
+                    if all {
+                        let t = l.trim_start();
+                        t.strip_prefix("> ").or_else(|| t.strip_prefix('>')).unwrap_or(t).to_string()
+                    } else {
+                        format!("> {l}")
+                    }
+                })
+                .collect();
+            let joined = new.join("\n");
+            text.replace_range(start..end, &joined);
+            Some(text.get(..start + joined.len()).map_or(0, |p| p.chars().count()))
+        }
     };
     let changed = new_caret.is_some();
     if let Some(c) = new_caret {
@@ -1534,7 +1616,17 @@ pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: Exte
         st.hash = hash_str(text);
         let f = st.blocks.at_offset(c);
         st.caret = Some(f);
+        st.anchor = Some(f);
         st.focus = Some(f);
+        // La selección sigue puesta si cae en un bloque (negrita sobre lo seleccionado).
+        if let Some((a, b)) = keep.filter(|(a, b)| a != b) {
+            let (fa, fb) = (st.blocks.at_offset(a), st.blocks.at_offset(b));
+            if fa.0 == fb.0 {
+                st.select = Some((fa.0, fa.1, fb.1));
+                st.anchor = Some(fa);
+                st.focus = None;
+            }
+        }
         ctx.request_repaint();
     }
     ctx.data_mut(|d| d.insert_temp(id, st));
@@ -1579,6 +1671,42 @@ mod tests {
         assert!(!apply_external(&ctx, id, &mut text, ExternalEdit::Undo));
         assert!(apply_external(&ctx, id, &mut text, ExternalEdit::DeleteWord));
         assert_eq!(text, "");
+    }
+
+    /// La barra de formato de una app: negrita sobre la selección, título, cita, enlace, rehacer.
+    #[test]
+    fn format_actions_use_the_selection() {
+        let ctx = egui::Context::default();
+        let id = Id::unique("formato");
+        let mut text = "Hola mundo\n\nsegunda".to_string();
+        apply_external(&ctx, id, &mut text, ExternalEdit::Insert(String::new()));
+        // Selección de «mundo» en el primer bloque.
+        let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
+        st.blocks = Blocks::new(&text);
+        st.hash = hash_str(&text);
+        let uid = st.blocks.chunks.first().map_or(0, |c| c.uid);
+        st.caret = Some((uid, 10));
+        st.anchor = Some((uid, 5));
+        ctx.data_mut(|d| d.insert_temp(id, st));
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Wrap("**".into())));
+        assert_eq!(text, "Hola **mundo**\n\nsegunda");
+        let st = ctx.data(|d| d.get_temp::<State>(id)).unwrap_or_default();
+        assert!(st.select.is_some_and(|(_, a, b)| b - a == 5), "la selección sigue sobre «mundo»");
+        // Título en la línea del cursor.
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Line(edit::LineKind::Heading(2))));
+        assert!(text.starts_with("## Hola **mundo**"), "{text}");
+        // Cita y la quita.
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Quote));
+        assert!(text.starts_with("> ## Hola"), "{text}");
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Quote));
+        assert!(text.starts_with("## Hola"), "{text}");
+        // Deshacer y rehacer.
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Undo));
+        assert!(text.starts_with("> ## Hola"), "{text}");
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Redo));
+        assert!(text.starts_with("## Hola"), "{text}");
+        assert!(caret_offset(&ctx, id, &text).is_some());
+        assert!(caret_offset(&ctx, id, "otro").is_none(), "texto distinto: no se sabe");
     }
 
     #[test]

@@ -52,7 +52,7 @@ mod span;
 pub mod spell;
 mod table_ui;
 pub use blocks::{
-    ExternalEdit, Hooks, apply_external, show as show_blocks, show_hooks as show_blocks_hooks,
+    ExternalEdit, Hooks, apply_external, caret_offset, show as show_blocks, show_hooks as show_blocks_hooks,
     show_with as show_blocks_with,
 };
 pub use diagrams::{DiagramImage, DiagramRenderer};

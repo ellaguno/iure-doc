@@ -2136,6 +2136,7 @@ pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: Exte
 
 #[cfg(test)]
 mod tests {
+
     #[test]
     fn heading_levels_follow_markdown() {
         assert_eq!(super::heading_level("# Uno"), 1);

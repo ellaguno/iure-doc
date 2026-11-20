@@ -664,13 +664,15 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
     } else {
         s.body_family.clone()
     };
-    let size = if fmt.code { size * 0.92 } else { size };
+    // El monoespaciado se ve más grande que la letra del texto: un poco menor (como la 1.x, 0,875 em).
+    let size = if fmt.code { size * 0.86 } else { size };
     let mut color = if fmt.marker {
         s.muted.gamma_multiply(0.75)
     } else if fmt.bullet || fmt.link {
         s.accent
     } else if fmt.quote {
-        s.muted
+        // Las citas se leen con el color del texto (la barra las distingue), como en la 1.x.
+        s.text.gamma_multiply(0.85)
     } else {
         s.text
     };
@@ -777,11 +779,19 @@ pub(crate) fn layout_job_full(
                 || ((x.deco == DECO_RULE || x.deco >= DECO_CALLOUT) && !on_line));
     }
     // Líneas vacías dentro del bloque (fuera del código): un poco de aire, no un renglón entero.
-    let bytes = text.as_bytes();
-    for (i, x) in f.iter_mut().enumerate() {
-        if bytes.get(i) == Some(&b'\n') && i > 0 && bytes.get(i - 1) == Some(&b'\n') && !x.code {
-            x.blank = true;
+    // También las que solo tienen espacios (Pandoc y otros sangran así las líneas vacías de una
+    // lista «suelta»): si no, cada elemento se separaba por un renglón completo.
+    let mut ls = 0usize;
+    for line in text.split_inclusive('\n') {
+        let end = ls + line.len();
+        if ls > 0 && line.ends_with('\n') && line.trim().is_empty() {
+            for x in f.get_mut(ls..end).into_iter().flatten() {
+                if !x.code {
+                    x.blank = true;
+                }
+            }
         }
+        ls = end;
     }
     // Fórmulas en línea dibujadas, fuera de la línea del cursor: el primer `$` hace de hueco y el
     // resto se oculta.
@@ -1495,6 +1505,24 @@ mod tests {
         // Sin cursor: todas ocultas.
         let job = layout_job(t, &s, 300.0, None);
         assert!(hidden(&job, "**dos") && hidden(&job, "**cuatro"));
+    }
+
+    /// Las líneas vacías con espacios de una lista «suelta» (como las deja Pandoc) se ven tan bajas
+    /// como las vacías de verdad, no como un renglón entero.
+    #[test]
+    fn blank_lines_with_spaces_are_short() {
+        let s = test_style();
+        let short = |t: &str| {
+            let job = layout_job(t, &s, 300.0, None);
+            let at = t.find('\n').map_or(0, |n| n + 1);
+            let end = t.get(at..).and_then(|r| r.find('\n')).map_or(t.len(), |n| at + n + 1);
+            job.sections
+                .iter()
+                .filter(|x| x.byte_range.start.0 >= at && x.byte_range.start.0 < end)
+                .all(|x| x.format.line_height.is_some_and(|h| h < s.size))
+        };
+        assert!(short("-   uno\n\n-   dos"));
+        assert!(short("-   uno\n    \n    -   dos"), "con espacios, también");
     }
 
     fn test_style() -> EditorStyle {

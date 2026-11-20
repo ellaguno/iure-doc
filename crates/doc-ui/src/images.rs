@@ -202,6 +202,7 @@ impl DiagramRenderer for LocalImages {
             height: img.height() as usize,
             rgba: img.into_raw(),
             points: [w as f32, h as f32],
+            hotspots: Vec::new(),
         })
     }
 }
@@ -235,6 +236,15 @@ impl DiagramRenderer for Renderers {
 
     fn menu(&self, ui: &mut egui::Ui, block: &str) -> Option<String> {
         self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.menu(ui, block))
+    }
+
+    fn node_action(
+        &self,
+        block: &str,
+        id: usize,
+        action: crate::diagrams::NodeAction,
+    ) -> Option<(String, Option<usize>)> {
+        self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.node_action(block, id, action))
     }
 }
 

@@ -500,6 +500,86 @@ fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
     })
 }
 
+/// Los nodos que se pueden pulsar de un dibujo (`spots`, en puntos del dibujo de tamaño `size`):
+/// un clic elige uno (se resalta y aparece su barra: rama hija, hermana, borrar), doble clic lleva
+/// a su texto, Esc o un clic fuera lo suelta. Devuelve si el clic cayó en un nodo y la acción pedida.
+fn node_overlay(
+    ui: &Ui,
+    key: Id,
+    resp: &egui::Response,
+    size: egui::Vec2,
+    spots: &[crate::Hotspot],
+) -> (bool, Option<(usize, crate::NodeAction)>) {
+    use crate::NodeAction;
+    if spots.is_empty() {
+        return (false, None);
+    }
+    let img = resp.rect;
+    let k = img.width() / size.x.max(1.0);
+    let screen = |r: [f32; 4]| {
+        egui::Rect::from_min_max(img.min + egui::vec2(r[0] * k, r[1] * k), img.min + egui::vec2(r[2] * k, r[3] * k))
+    };
+    let at = |p: egui::Pos2| spots.iter().find(|s| screen(s.rect).expand(2.0).contains(p)).map(|s| s.id);
+    let mut sel = ui.data(|d| d.get_temp::<usize>(key));
+    let mut act = None;
+    let mut hit = false;
+    if let Some(p) = resp.hover_pos()
+        && at(p).is_some()
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if resp.clicked() || resp.double_clicked() {
+        let id = resp.interact_pointer_pos().and_then(at);
+        hit = id.is_some();
+        sel = id;
+        if resp.double_clicked()
+            && let Some(id) = id
+        {
+            act = Some((id, NodeAction::Goto));
+        }
+    }
+    if ui.input(|i| i.key_pressed(Key::Escape)) {
+        sel = None;
+    }
+    if let Some(id) = sel
+        && let Some(spot) = spots.iter().find(|s| s.id == id)
+    {
+        let r = screen(spot.rect).expand(3.0);
+        let accent = ui.visuals().selection.stroke.color;
+        ui.painter().rect_stroke(r, 6.0, egui::Stroke::new(2.0, accent), egui::StrokeKind::Outside);
+        let pick = iurefficient_ui::lang::pick;
+        egui::Area::new(key.with("bar"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(r.left_bottom() + egui::vec2(0.0, 6.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        use iurefficient_ui::icons::{Icon, icon_button};
+                        if icon_button(ui, Icon::Indent, pick("Add child branch", "Añadir rama hija"), true).clicked()
+                        {
+                            act = Some((id, NodeAction::AddChild));
+                        }
+                        if icon_button(ui, Icon::Plus, pick("Add sibling branch", "Añadir rama hermana"), true)
+                            .clicked()
+                        {
+                            act = Some((id, NodeAction::AddSibling));
+                        }
+                        if icon_button(ui, Icon::Trash, pick("Delete branch", "Eliminar rama"), true).clicked() {
+                            act = Some((id, NodeAction::Delete));
+                        }
+                    });
+                });
+            });
+    }
+    ui.data_mut(|d| match sel {
+        Some(id) => {
+            d.insert_temp(key, id);
+        }
+        None => d.remove::<usize>(key),
+    });
+    (hit, act)
+}
+
 /// El dibujo de un diagrama junto a su texto, a lo más `max_w` de ancho.
 fn side_image(ui: &mut Ui, tex: &egui::TextureHandle, size: egui::Vec2, max_w: f32) -> egui::Response {
     let k = (max_w / size.x.max(1.0)).min(MAX_IMAGE_HEIGHT / size.y.max(1.0)).min(1.0);
@@ -1254,15 +1334,31 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                                         };
                                         egui::WidgetInfo::labeled(egui::Role::Button, true, label)
                                     });
-                                    if resp.clicked() {
+                                    let content =
+                                        st.blocks.chunks.get(i).map(|c| c.content.clone()).unwrap_or_default();
+                                    // Los nodos de un mapa mental: elegir uno y su barra.
+                                    let spots = st.diagrams.hotspots(ui.ctx(), r, &content);
+                                    let (on_node, node_act) = node_overlay(ui, fid.with("nodos"), &resp, size, &spots);
+                                    if resp.clicked() && !on_node {
                                         if let Some(c) = st.blocks.chunks.get_mut(i) {
                                             c.raw = true;
                                         }
                                         st.focus = Some((uid, 0));
                                     }
+                                    if let Some((id, a)) = node_act
+                                        && let Some((n, caret)) = r.node_action(&content, id, a)
+                                        && let Some(c) = st.blocks.chunks.get_mut(i)
+                                    {
+                                        let changed_text = c.content != n;
+                                        c.content = n;
+                                        if a == crate::NodeAction::Goto {
+                                            c.raw = true;
+                                            st.focus = Some((uid, caret.unwrap_or(0)));
+                                        } else if changed_text && act.is_none() {
+                                            act = Some(Act::Edited(i, 0));
+                                        }
+                                    }
                                     // Clic derecho: las opciones del diagrama (las da la app).
-                                    let content =
-                                        st.blocks.chunks.get(i).map(|c| c.content.clone()).unwrap_or_default();
                                     let mut new_block: Option<String> = None;
                                     resp.context_menu(|ui| {
                                         if let Some(n) = r.menu(ui, &content) {
@@ -1526,6 +1622,23 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                         } else {
                             c.height + img.rect.height()
                         };
+                        // Los nodos: elegir uno y su barra; la acción edita la lista y deja el
+                        // cursor en la rama nueva.
+                        if let (Some(r), Some((_, sz))) = (diagrams.as_ref(), side.as_ref()) {
+                            let spots = st.diagrams.hotspots(ui.ctx(), r, &c.content);
+                            let (_, node_act) = node_overlay(ui, fid.with("nodos"), img, *sz, &spots);
+                            if let Some((id, a)) = node_act
+                                && let Some((n, caret)) = r.node_action(&c.content, id, a)
+                            {
+                                if c.content != n {
+                                    c.content = n;
+                                    templated = true;
+                                }
+                                if let Some(at) = caret {
+                                    st.focus = Some((c.uid, at));
+                                }
+                            }
+                        }
                         // Clic derecho sobre el dibujo: sus opciones.
                         if let Some(r) = diagrams.as_ref() {
                             let content = c.content.clone();
@@ -2230,7 +2343,13 @@ mod perf {
             1
         }
         fn render(&self, _block: &str, _scale: f32) -> Result<crate::DiagramImage, String> {
-            Ok(crate::DiagramImage { width: 300, height: 120, rgba: vec![200; 300 * 120 * 4], points: [300.0, 120.0] })
+            Ok(crate::DiagramImage {
+                width: 300,
+                height: 120,
+                rgba: vec![200; 300 * 120 * 4],
+                points: [300.0, 120.0],
+                hotspots: Vec::new(),
+            })
         }
     }
 

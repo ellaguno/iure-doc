@@ -308,7 +308,13 @@ impl iure_doc_ui::DiagramRenderer for FakeDiagrams {
         if block.contains("mal") {
             return Err("La línea 2 no se entiende.".into());
         }
-        Ok(iure_doc_ui::DiagramImage { width: 20, height: 10, rgba: vec![200; 20 * 10 * 4], points: [200.0, 100.0] })
+        Ok(iure_doc_ui::DiagramImage {
+            width: 20,
+            height: 10,
+            rgba: vec![200; 20 * 10 * 4],
+            points: [200.0, 100.0],
+            hotspots: Vec::new(),
+        })
     }
 }
 
@@ -765,4 +771,61 @@ fn loose_lists_are_not_double_spaced() {
     let tight = height("Intro\n\n- [Uno](#a)\n    - [Dos](#b)\n    - [Tres](#c)\n\nFin\n");
     let loose = height("Intro\n\n- [Uno](#a)\n\n    - [Dos](#b)\n\n    - [Tres](#c)\n\nFin\n");
     assert!(loose < tight * 1.4, "suelta {loose} frente a compacta {tight}");
+}
+
+// --- Nodos de un mapa mental pulsables en el dibujo ---
+
+struct FakeMap;
+
+impl iure_doc_ui::DiagramRenderer for FakeMap {
+    fn accepts(&self, block: &str) -> bool {
+        block.starts_with("> [!MINDMAP")
+    }
+    fn key(&self) -> u64 {
+        2
+    }
+    fn render(&self, _block: &str, _scale: f32) -> Result<iure_doc_ui::DiagramImage, String> {
+        Ok(iure_doc_ui::DiagramImage {
+            width: 20,
+            height: 10,
+            rgba: vec![200; 20 * 10 * 4],
+            points: [200.0, 100.0],
+            hotspots: vec![iure_doc_ui::Hotspot { id: 1, rect: [10.0, 10.0, 60.0, 30.0] }],
+        })
+    }
+    fn node_action(&self, block: &str, id: usize, a: iure_doc_ui::NodeAction) -> Option<(String, Option<usize>)> {
+        (id == 1 && a == iure_doc_ui::NodeAction::AddChild).then(|| (format!("{block}\n>   - Nueva"), None))
+    }
+}
+
+#[test]
+fn clicking_a_mind_map_node_offers_its_bar() {
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let r: std::sync::Arc<dyn iure_doc_ui::DiagramRenderer> = std::sync::Arc::new(FakeMap);
+    let doc = "Antes\n\n> [!MINDMAP|map] C\n> - Uno\n\nDespués\n";
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let out = iure_doc_ui::show_blocks_with(ui, Id::unique("mm"), &mut st.text, "Escribe", Some(r.clone()));
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        State { text: doc.to_string() },
+    );
+    assert!(wait_for(&mut h, "Diagrama 2"));
+    let img = h.get_by_label("Diagrama 2").rect();
+    let k = img.width() / 200.0;
+    let p = img.min + egui::vec2(35.0 * k, 20.0 * k);
+    h.event(egui::Event::PointerMoved(p));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+    }
+    h.run_steps(3);
+    assert!(h.query_by_label("Diagrama 2").is_some(), "un clic en un nodo no abre el código");
+    h.get_by_label("Añadir rama hija").click();
+    h.run_steps(3);
+    assert_eq!(h.state().text, "Antes\n\n> [!MINDMAP|map] C\n> - Uno\n>   - Nueva\n\nDespués\n");
 }

@@ -10,8 +10,26 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
+/// Una zona del dibujo que se puede pulsar (un nodo de un mapa mental): su número para la app y
+/// su rectángulo en puntos, desde la esquina del dibujo (`[x0, y0, x1, y1]`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hotspot {
+    pub id: usize,
+    pub rect: [f32; 4],
+}
+
+/// Lo que se pide sobre una zona del dibujo (barra de un nodo de un mapa mental).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeAction {
+    AddChild,
+    AddSibling,
+    Delete,
+    /// Llevar el cursor a su texto (doble clic).
+    Goto,
+}
+
 /// Píxeles de un diagrama dibujado.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct DiagramImage {
     pub width: usize,
     pub height: usize,
@@ -19,6 +37,8 @@ pub struct DiagramImage {
     pub rgba: Vec<u8>,
     /// Tamaño con que se ve, en puntos de egui (los píxeles pueden ser más, para pantallas densas).
     pub points: [f32; 2],
+    /// Zonas que se pueden pulsar (vacío: ninguna).
+    pub hotspots: Vec<Hotspot>,
 }
 
 /// Lo que la app anfitriona sabe dibujar.
@@ -39,6 +59,11 @@ pub trait DiagramRenderer: Send + Sync {
     /// Menú de clic derecho sobre el dibujo (opciones del diagrama). Devuelve el bloque nuevo si se
     /// eligió algo.
     fn menu(&self, _ui: &mut egui::Ui, _block: &str) -> Option<String> {
+        None
+    }
+    /// Una acción sobre la zona `id` del dibujo: el bloque nuevo y, si se da, dónde dejar el cursor
+    /// (carácter del bloque).
+    fn node_action(&self, _block: &str, _id: usize, _action: NodeAction) -> Option<(String, Option<usize>)> {
         None
     }
 }
@@ -62,7 +87,7 @@ const MAX_SLOTS: usize = 64;
 enum Slot {
     Pending,
     Done(Arc<DiagramImage>),
-    Ready(egui::TextureHandle, egui::Vec2),
+    Ready(egui::TextureHandle, egui::Vec2, Arc<Vec<Hotspot>>),
     Failed(String),
 }
 
@@ -88,6 +113,20 @@ fn key_of(block: &str, renderer: u64, scale: f32) -> u64 {
 }
 
 impl Cache {
+    /// Las zonas del dibujo de `block`, si ya está listo.
+    pub(crate) fn hotspots(
+        &self,
+        ctx: &egui::Context,
+        renderer: &Arc<dyn DiagramRenderer>,
+        block: &str,
+    ) -> Arc<Vec<Hotspot>> {
+        let key = key_of(block, renderer.key(), ctx.pixels_per_point());
+        match self.lock().get(&key) {
+            Some((Slot::Ready(_, _, h), _)) => Arc::clone(h),
+            _ => Arc::new(Vec::new()),
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, (Slot, u64)>> {
         self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -145,13 +184,13 @@ impl Cache {
         match slot {
             Slot::Pending => View::Pending,
             Slot::Failed(e) => View::Failed(e),
-            Slot::Ready(t, s) => View::Image(t, s),
+            Slot::Ready(t, s, _) => View::Image(t, s),
             Slot::Done(img) => {
                 let color = egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.rgba);
                 let tex = ctx.load_texture(format!("iure-doc-diagram-{key}"), color, egui::TextureOptions::LINEAR);
                 let size = egui::vec2(img.points[0].max(1.0), img.points[1].max(1.0));
                 if let Some(s) = slots.get_mut(&key) {
-                    s.0 = Slot::Ready(tex.clone(), size);
+                    s.0 = Slot::Ready(tex.clone(), size, Arc::new(img.hotspots.clone()));
                 }
                 View::Image(tex, size)
             }

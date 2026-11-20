@@ -56,7 +56,13 @@ impl iure_doc_ui::DiagramRenderer for AnyDrawing {
         7
     }
     fn render(&self, _block: &str, _scale: f32) -> Result<iure_doc_ui::DiagramImage, String> {
-        Ok(iure_doc_ui::DiagramImage { width: 4, height: 2, rgba: vec![128; 32], points: [40.0, 20.0] })
+        Ok(iure_doc_ui::DiagramImage {
+            width: 4,
+            height: 2,
+            rgba: vec![128; 32],
+            points: [40.0, 20.0],
+            hotspots: Vec::new(),
+        })
     }
 }
 

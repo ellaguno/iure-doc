@@ -31,6 +31,7 @@
 
 pub mod edit;
 pub mod html;
+pub mod math;
 mod parse;
 pub mod table;
 pub mod write;

@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/doc", "crates/doc-ui", "crates/export", "xtask"]
 
 [workspace.package]
-version = "0.20.0"
+version = "0.21.0"
 edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
@@ -38,6 +38,7 @@ zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 typst = "0.15.1"
 typst-pdf = "0.15.1"
 typst-layout = "0.15.1"
+typst-render = "0.15.1"
 typst-assets = { version = "0.15.1", features = ["fonts"] }
 # pruebas
 proptest = "1"

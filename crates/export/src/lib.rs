@@ -25,9 +25,13 @@
 
 pub mod docx;
 pub mod html;
+#[cfg(feature = "math")]
+pub mod math;
 #[cfg(feature = "pdf")]
 pub mod pdf;
 mod text;
+#[cfg(feature = "math")]
+mod world;
 
 use std::path::{Component, Path, PathBuf};
 

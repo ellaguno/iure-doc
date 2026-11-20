@@ -371,6 +371,8 @@ struct State {
     hidden: Option<(Kind, usize)>,
     /// Se mostró en el último cuadro (las teclas entre bloques no lo pisan).
     open: bool,
+    /// Dónde se dibujó: un clic ahí quita el foco al campo, pero el menú sigue hasta elegir.
+    rect: Option<egui::Rect>,
 }
 
 fn state_id(id: Id) -> Id {
@@ -445,8 +447,18 @@ pub(crate) fn popup(
 ) -> Option<(String, usize)> {
     let mut st = ui.data(|d| d.get_temp::<State>(state_id(id))).unwrap_or_default();
     let focused = ui.memory(|m| m.has_focus(id));
-    let caret = out.cursor_range.map(|r| r.primary.index.0);
-    let trig = caret.filter(|_| focused).and_then(|c| detect(text, c).map(|t| (t, c)));
+    // Pulsar una opción con el ratón le quita el foco al campo: mientras el puntero esté en el
+    // menú, sigue abierto (si no, el clic nunca llegaba a la opción).
+    let in_popup = st.open
+        && st.rect.is_some_and(|r| {
+            ui.input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos()).is_some_and(|p| r.expand(2.0).contains(p)))
+        });
+    let caret = out.cursor_range.map(|r| r.primary.index.0).or_else(|| {
+        egui::text_edit::TextEditState::load(ui.ctx(), id)
+            .and_then(|s| s.cursor.char_range())
+            .map(|r| r.primary.index.0)
+    });
+    let trig = caret.filter(|_| focused || in_popup).and_then(|c| detect(text, c).map(|t| (t, c)));
     let any = trig.is_some();
     let Some((trig, caret)) = trig.filter(|(t, _)| st.hidden != Some((t.kind, t.start))) else {
         if st.open || st.hidden.is_some() {
@@ -476,9 +488,11 @@ pub(crate) fn popup(
     let c = iurefficient_ui::theme::colors(ui);
     let mut chosen = None;
     let width = if trig.kind == Kind::Wiki { 320.0 } else { 256.0 };
-    egui::Area::new(id.with("suggest-area")).order(egui::Order::Foreground).fixed_pos(anchor).constrain(true).show(
-        ui.ctx(),
-        |ui| {
+    let area = egui::Area::new(id.with("suggest-area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(anchor)
+        .constrain(true)
+        .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(0, 4)).show(ui, |ui| {
                 ui.set_width(width);
                 if items.is_empty() {
@@ -533,8 +547,8 @@ pub(crate) fn popup(
                     }
                 });
             });
-        },
-    );
+        });
+    st.rect = Some(area.response.rect);
     st.open = chosen.is_none();
     if chosen.is_some() {
         st.sel = 0;

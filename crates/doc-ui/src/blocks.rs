@@ -1851,7 +1851,14 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
     }
     if let Some(a) = act {
         let (focus, edits) = match a {
-            Act::Edited(i, at) => (st.blocks.edited(i, at), true),
+            Act::Edited(i, at) => {
+                // Si el bloque no se partió, el campo ya tiene su cursor: no se toca (volver a
+                // ponerlo deshacía la composición de un acento, «´» + «a» → «´á»).
+                let (uid, n) = (st.blocks.chunks.get(i).map(|c| c.uid), st.blocks.chunks.len());
+                let f = st.blocks.edited(i, at);
+                let same = st.blocks.chunks.len() == n && f.is_some_and(|(u, _)| Some(u) == uid);
+                (if same { None } else { f }, true)
+            }
             Act::Break(i) => (st.blocks.break_after(i), true),
             Act::BreakBefore(i) => (st.blocks.break_before(i), true),
             Act::MergePrev(i) => (st.blocks.merge_prev(i), true),

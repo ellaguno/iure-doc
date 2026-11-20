@@ -883,3 +883,53 @@ fn editing_a_diagram_shows_its_preview() {
     assert!(h.query_by_label("Diagrama 2").is_none(), "se ve el código");
     assert!(wait_for(&mut h, "Dibujo del diagrama"), "y debajo, el dibujo");
 }
+
+/// Regresión (dueño 2026-11-20): en el redactor no salían los acentos. La tecla muerta llega como
+/// preedición («´») y luego el texto final («á»); el editor por bloques volvía a poner el cursor y
+/// quedaba «´á».
+#[test]
+fn dead_keys_compose_accents() {
+    for blocks in [false, true] {
+        let mut h = if blocks { blocks_harness("Hola\n") } else { harness("Hola\n") };
+        if blocks {
+            block_cursor_at(&mut h, 4);
+        } else {
+            cursor_at(&mut h, 4);
+        }
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "´".into(), active_range_chars: None }));
+        h.run_steps(2);
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit("á".into())));
+        h.run_steps(2);
+        h.event(egui::Event::Text(" y ñ".into()));
+        h.run_steps(2);
+        assert_eq!(h.state().text, "Holaá y ñ\n", "por bloques: {blocks}");
+    }
+}
+
+/// Regresión (dueño 2026-11-20): en el menú de `/`, elegir con el ratón no hacía nada (el clic le
+/// quitaba el foco al campo y el menú se cerraba antes de soltar).
+#[test]
+fn slash_menu_items_can_be_clicked() {
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let mut h = menus_harness("/menta\n");
+    menus_cursor_at(&mut h, 6);
+    h.run();
+    let p = h.get_by_label("Mapa mental").rect().center();
+    h.event(egui::Event::PointerMoved(p));
+    h.run();
+    h.event(egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.run();
+    h.event(egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(3);
+    assert!(h.state().text.starts_with("> [!MINDMAP]"), "{:?}", h.state().text);
+}

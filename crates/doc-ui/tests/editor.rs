@@ -829,3 +829,57 @@ fn clicking_a_mind_map_node_offers_its_bar() {
     h.run_steps(3);
     assert_eq!(h.state().text, "Antes\n\n> [!MINDMAP|map] C\n> - Uno\n>   - Nueva\n\nDespués\n");
 }
+
+/// Regresión (dueño 2026-11-20): un diagrama al final (o al principio) no dejaba escribir después
+/// (o antes). La franja junto al dibujo abre un párrafo ahí.
+#[test]
+fn you_can_write_after_and_before_a_diagram() {
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let doc = "```mermaid\nflowchart LR\n  A-->B\n```\n";
+    let mut h = diagram_harness(doc);
+    assert!(wait_for(&mut h, "Diagrama 1"));
+    // Después: la última franja.
+    let after = h.get_all_by_label("Clic para escribir aquí").last().map(|n| n.rect()).unwrap();
+    let p = after.center();
+    h.event(egui::Event::PointerMoved(p));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+    }
+    h.run_steps(3);
+    h.event(egui::Event::Text("Fin".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().text, "```mermaid\nflowchart LR\n  A-->B\n```\n\nFin\n", "{:?}", h.state().text);
+    // Antes: la franja de arriba.
+    let before = h.get_all_by_label("Clic para escribir aquí").next().map(|n| n.rect()).unwrap();
+    let p = before.center();
+    h.event(egui::Event::PointerMoved(p));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+    }
+    h.run_steps(3);
+    h.event(egui::Event::Text("Inicio".into()));
+    h.run_steps(3);
+    assert!(h.state().text.starts_with("Inicio\n\n```mermaid"), "{:?}", h.state().text);
+}
+
+/// Al editar el código de un diagrama, su dibujo se ve debajo (vista previa, como IureEditor 1.x).
+#[test]
+fn editing_a_diagram_shows_its_preview() {
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let mut h = diagram_harness(DIAGRAM_DOC);
+    assert!(wait_for(&mut h, "Diagrama 2"));
+    h.get_by_label("Diagrama 2").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Diagrama 2").is_none(), "se ve el código");
+    assert!(wait_for(&mut h, "Dibujo del diagrama"), "y debajo, el dibujo");
+}

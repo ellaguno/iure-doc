@@ -110,6 +110,11 @@ pub fn on_enter(text: &str, cursor: usize) -> Option<Edit> {
     if in_fence(text, at) {
         return None;
     }
+    // Una lista dentro de una cita (`> - …`, como la de un mapa mental): la regla de la lista,
+    // conservando las marcas de cita.
+    if let Some(e) = in_quote(text, cursor, on_enter) {
+        return e;
+    }
     let (start, end) = line_at(text, at);
     let line = text.get(start..end)?;
     let p = prefix(line)?;
@@ -141,6 +146,49 @@ pub fn on_enter(text: &str, cursor: usize) -> Option<Edit> {
     out.push_str(text.get(at..)?);
     let c = cursor + insert.chars().count();
     Some(Edit { text: out, sel_start: c, sel_end: c })
+}
+
+/// Bytes de las marcas de cita al principio de una línea (`> `, `> > `…; 0 si no es cita).
+fn quote_lead(line: &str) -> usize {
+    let mut at = 0usize;
+    loop {
+        let rest = line.get(at..).unwrap_or("");
+        let sp = rest.len() - rest.trim_start_matches(' ').len();
+        if sp > 3 || !rest.get(sp..).is_some_and(|r| r.starts_with('>')) {
+            return at;
+        }
+        at += sp + 1;
+        if line.get(at..).is_some_and(|r| r.starts_with(' ')) {
+            at += 1;
+        }
+    }
+}
+
+/// Aplica `f` a una línea de lista dentro de una cita como si no tuviera las marcas de cita, y
+/// las vuelve a poner (también en las líneas nuevas). `None`: la línea no es una lista en cita.
+fn in_quote(text: &str, cursor: usize, f: impl Fn(&str, usize) -> Option<Edit>) -> Option<Option<Edit>> {
+    let at = byte_of(text, cursor);
+    let (start, end) = line_at(text, at);
+    let line = text.get(start..end)?;
+    let q = quote_lead(line);
+    if q == 0 {
+        return None;
+    }
+    let inner = line.get(q..)?;
+    let p = prefix(inner)?;
+    if p.marker == "> " {
+        return None;
+    }
+    let lead = line.get(..q)?;
+    let inner_cursor = cursor.checked_sub(char_of(text, start + q))?;
+    let Some(e) = f(inner, inner_cursor) else { return Some(None) };
+    // Las marcas de cita, también en cada línea nueva.
+    let lead_chars = lead.chars().count();
+    let rebuilt = e.text.replace('\n', &format!("\n{lead}"));
+    let newlines_before = |c: usize| e.text.chars().take(c).filter(|ch| *ch == '\n').count();
+    let shift = |c: usize| char_of(text, start) + lead_chars + c + newlines_before(c) * lead_chars;
+    let out = format!("{}{lead}{rebuilt}{}", text.get(..start)?, text.get(end..)?);
+    Some(Some(Edit { text: out, sel_start: shift(e.sel_start), sel_end: shift(e.sel_end) }))
 }
 
 /// La cerca que abre el bloque de código donde está `at` (p. ej. ```` ``` ```` o `~~~~`).
@@ -295,6 +343,9 @@ pub fn indent(text: &str, cursor: usize, outdent: bool) -> Option<Edit> {
     if in_fence(text, at) {
         return None;
     }
+    if let Some(e) = in_quote(text, cursor, |t, c| indent(t, c, outdent)) {
+        return e;
+    }
     let (start, end) = line_at(text, at);
     let line = text.get(start..end)?;
     let p = prefix(line)?;
@@ -444,6 +495,27 @@ mod tests {
         assert_eq!(h.text, "<mark style=\"background-color: #FFF2CC\">uno</mark> dos tres");
         // Un color que no es `#RRGGBB` no entra.
         assert_eq!(paint(t, 0, 3, Paint::Color, Some("red\" onload=\"x")).text, t);
+    }
+
+    #[test]
+    fn lists_inside_quotes_continue_and_indent() {
+        use super::{indent, on_enter};
+        // Intro en un elemento de un mapa mental: otro elemento, con su `> `.
+        let t = "> [!MINDMAP] C\n> - Uno";
+        let e = on_enter(t, t.chars().count()).unwrap();
+        assert_eq!(e.text, "> [!MINDMAP] C\n> - Uno\n> - ");
+        assert_eq!(e.sel_start, e.text.chars().count());
+        // Tab lo hace hijo; Mayús+Tab lo regresa.
+        let i = indent(&e.text, e.sel_start, false).unwrap();
+        assert_eq!(i.text, "> [!MINDMAP] C\n> - Uno\n>   - ");
+        assert_eq!(i.sel_start, i.text.chars().count());
+        let o = indent(&i.text, i.sel_start, true).unwrap();
+        assert_eq!(o.text, e.text);
+        // Intro en el elemento vacío sale de la lista (queda la cita); otra vez, de la cita.
+        let x = on_enter(&e.text, e.sel_start).unwrap();
+        assert_eq!(x.text, "> [!MINDMAP] C\n> - Uno\n> ");
+        // Fuera de las citas, igual que siempre.
+        assert_eq!(on_enter("- a", 3).unwrap().text, "- a\n- ");
     }
 
     #[test]

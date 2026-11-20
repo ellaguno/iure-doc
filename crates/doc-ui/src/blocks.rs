@@ -240,6 +240,17 @@ impl Blocks {
         Some((uid, 0))
     }
 
+    /// Un bloque vacío antes del `i` (con su línea en blanco).
+    pub(crate) fn break_before(&mut self, i: usize) -> Option<Focus> {
+        if i >= self.chunks.len() || self.chunks.len() >= iure_doc::MAX_BLOCKS {
+            return None;
+        }
+        let c = self.chunk(String::new(), "\n\n".to_string(), true);
+        let uid = c.uid;
+        self.chunks.insert(i, c);
+        Some((uid, 0))
+    }
+
     /// Retroceso al inicio del bloque `i`: se une con el anterior.
     pub(crate) fn merge_prev(&mut self, i: usize) -> Option<Focus> {
         let p = i.checked_sub(1)?;
@@ -337,6 +348,8 @@ const MAX_IMAGE_HEIGHT: f32 = 640.0;
 /// Estado del editor entre cuadros.
 #[derive(Clone, Default)]
 struct State {
+    /// El último dibujo bueno de cada bloque de diagrama (vista previa mientras se edita).
+    previews: std::collections::HashMap<u64, (egui::TextureHandle, egui::Vec2)>,
     /// El bloque de diagrama con el menú «Plantilla» abierto.
     templates: Option<u64>,
     blocks: Blocks,
@@ -414,6 +427,8 @@ fn closes(content: &str) -> bool {
 enum Act {
     Edited(usize, usize),
     Break(usize),
+    /// Un bloque vacío antes del `i` (para escribir antes de un dibujo).
+    BreakBefore(usize),
     MergePrev(usize),
     MergeNext(usize),
     Focus(Focus),
@@ -580,11 +595,46 @@ fn node_overlay(
     (hit, act)
 }
 
+/// La franja de alto `h` (al menos 14 puntos) junto a un dibujo o una tabla: al pasar se marca y un
+/// clic abre ahí un párrafo nuevo (como el «cursor entre bloques» de IureEditor 1.x). Devuelve si
+/// se pulsó y el alto que ocupó.
+fn gap_zone(ui: &mut Ui, h: f32) -> (bool, f32) {
+    let h = h.max(14.0);
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+    let label = iurefficient_ui::lang::pick("Click to write here", "Clic para escribir aquí");
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        let c = ui.visuals().selection.stroke.color;
+        ui.painter().line_segment(
+            [egui::pos2(rect.left(), rect.center().y), egui::pos2(rect.right(), rect.center().y)],
+            egui::Stroke::new(1.0, c.gamma_multiply(0.5)),
+        );
+        let font = egui::FontId::proportional(11.0);
+        let g = ui.painter().layout_no_wrap(label.to_string(), font, c);
+        let r = egui::Rect::from_min_size(egui::pos2(rect.left() + 8.0, rect.center().y - g.size().y / 2.0), g.size())
+            .expand(2.0);
+        ui.painter().rect_filled(r, 3.0, ui.visuals().panel_fill);
+        ui.painter().galley(r.min + egui::vec2(2.0, 2.0), g, c);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    (resp.clicked(), h)
+}
+
 /// El dibujo de un diagrama junto a su texto, a lo más `max_w` de ancho.
 fn side_image(ui: &mut Ui, tex: &egui::TextureHandle, size: egui::Vec2, max_w: f32) -> egui::Response {
     let k = (max_w / size.x.max(1.0)).min(MAX_IMAGE_HEIGHT / size.y.max(1.0)).min(1.0);
-    ui.add(egui::Image::new((tex.id(), size * k)).sense(egui::Sense::click()))
-        .on_hover_text(iurefficient_ui::lang::pick("Right-click: options", "Clic derecho: opciones"))
+    let r = ui
+        .add(egui::Image::new((tex.id(), size * k)).sense(egui::Sense::click()))
+        .on_hover_text(iurefficient_ui::lang::pick("Right-click: options", "Clic derecho: opciones"));
+    r.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Image,
+            true,
+            iurefficient_ui::lang::pick("Diagram drawing", "Dibujo del diagrama"),
+        )
+    });
+    r
 }
 
 /// La tabla de un bloque, si lo es (y `pulldown-cmark` también la lee como tabla).
@@ -1289,6 +1339,15 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                             c.raw = true;
                         } else {
                             let uid = c.uid;
+                            // Un dibujo al principio del documento: arriba, una franja para escribir
+                            // antes de él.
+                            if i == 0 {
+                                let (hit, gh) = gap_zone(ui, 0.0);
+                                if hit && act.is_none() {
+                                    act = Some(Act::BreakBefore(0));
+                                }
+                                y += gh;
+                            }
                             // Una imagen (con su texto alternativo) o un diagrama.
                             let image_alt = crate::images::image_of(&c.content).map(|(_, alt)| alt);
                             let resp_d = match st.diagrams.get(ui.ctx(), r, &c.content) {
@@ -1394,10 +1453,12 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                                         );
                                     }
                                 }
-                                if g > 0.0 {
-                                    ui.add_space(g);
+                                // Debajo de un dibujo, una franja para seguir escribiendo.
+                                let (hit, gh) = gap_zone(ui, g);
+                                if hit && act.is_none() {
+                                    act = Some(Act::Break(i));
                                 }
-                                y += dh + g;
+                                y += dh + gh;
                                 continue;
                             }
                         }
@@ -1474,10 +1535,11 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                                 );
                             }
                         }
-                        if g > 0.0 {
-                            ui.add_space(g);
+                        let (hit, gh) = gap_zone(ui, g);
+                        if hit && act.is_none() {
+                            act = Some(Act::Break(i));
                         }
-                        y += th + g;
+                        y += th + gh;
                         continue;
                     }
                     if focused {
@@ -1557,18 +1619,34 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                     }
                     // Un diagrama que se ve junto a su texto (un mapa mental con su lista): el dibujo
                     // debajo o a la derecha, siempre al día con lo que se escribe.
+                    // Un diagrama en edición (su código a la vista) se ve debajo, al día con lo que
+                    // se escribe (como IureEditor 1.x); mientras se vuelve a dibujar queda el último.
                     let place = match (diagrams.as_ref(), st.blocks.chunks.get(i)) {
-                        (Some(r), Some(c)) if !c.raw && r.accepts(&c.content) => r.placement(&c.content),
+                        (Some(r), Some(c)) if r.accepts(&c.content) => match r.placement(&c.content) {
+                            crate::Placement::Replace => crate::Placement::Below,
+                            p if !c.raw => p,
+                            _ => crate::Placement::Replace,
+                        },
                         _ => crate::Placement::Replace,
                     };
                     let mut side: Option<(egui::TextureHandle, egui::Vec2)> = None;
                     if place != crate::Placement::Replace
                         && let (Some(r), Some(c)) = (diagrams.as_ref(), st.blocks.chunks.get(i))
                     {
+                        let uid = c.uid;
                         match st.diagrams.get(ui.ctx(), r, &c.content) {
-                            View::Image(t, sz) => side = Some((t, sz)),
-                            View::Failed(e) => diagram_error = Some(e),
-                            View::Pending => {}
+                            View::Image(t, sz) => {
+                                st.previews.insert(uid, (t.clone(), sz));
+                                side = Some((t, sz));
+                            }
+                            View::Failed(e) => {
+                                diagram_error = Some(e);
+                                side = st.previews.get(&uid).cloned();
+                            }
+                            View::Pending => side = st.previews.get(&uid).cloned(),
+                        }
+                        if st.previews.len() > 32 {
+                            st.previews.clear();
                         }
                     }
                     let Some(c) = st.blocks.chunks.get_mut(i) else { break };
@@ -1775,6 +1853,7 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
         let (focus, edits) = match a {
             Act::Edited(i, at) => (st.blocks.edited(i, at), true),
             Act::Break(i) => (st.blocks.break_after(i), true),
+            Act::BreakBefore(i) => (st.blocks.break_before(i), true),
             Act::MergePrev(i) => (st.blocks.merge_prev(i), true),
             Act::MergeNext(i) => (st.blocks.merge_next(i), true),
             Act::Focus(f) => (Some(f), false),

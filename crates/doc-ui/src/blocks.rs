@@ -48,6 +48,7 @@
 //! **Resaltado de sintaxis** ([`crate::highlight`]): los bloques de código con lenguaje se colorean
 //! con los colores del tema.
 
+use iurefficient_ui::icons::{self, Icon};
 use std::hash::{Hash, Hasher};
 
 use egui::text::{CCursor, CCursorRange};
@@ -336,6 +337,8 @@ const MAX_IMAGE_HEIGHT: f32 = 640.0;
 /// Estado del editor entre cuadros.
 #[derive(Clone, Default)]
 struct State {
+    /// El bloque de diagrama con el menú «Plantilla» abierto.
+    templates: Option<u64>,
     blocks: Blocks,
     /// Huella del texto que el editor conoce (si el anfitrión lo cambia, se vuelve a partir).
     hash: u64,
@@ -429,6 +432,10 @@ enum Act {
 
 /// La tecla entre bloques que toca en el bloque `i` (antes de que la vea su campo).
 fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
+    // Con el menú de `/` o `[[` abierto, las flechas e Intro son suyas.
+    if crate::suggest::is_open(ui, fid) {
+        return None;
+    }
     let c = blocks.chunks.get(i)?;
     let range = TextEditState::load(ui.ctx(), fid)?.cursor.char_range()?;
     let p = range.primary.index.0;
@@ -688,14 +695,31 @@ fn find_bar(ui: &mut Ui, id: Id, st: &mut State, text: &mut String, now: f64, ch
     }
     let n = st.find.matches.len();
     let (mut go, mut close, mut one, mut all) = (0isize, false, false, false);
-    egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 4)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            let q = ui.add(
+    // Una franja bajo la barra de la app, como la 1.x: buscar, contador, anterior/siguiente,
+    // mayúsculas, «Reemplazar…» y cerrar; el reemplazo en la misma franja.
+    let c = iurefficient_ui::theme::colors(ui);
+    let strip = egui::Frame::new()
+        .fill(c.surface_alt)
+        .corner_radius(6.0)
+        .stroke(egui::Stroke::new(1.0, c.separator))
+        .inner_margin(egui::Margin::symmetric(10, 6));
+    strip.show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let field_frame = |ui: &mut Ui, te: egui::TextEdit<'_>| {
+                ui.add(te.desired_width(210.0).margin(egui::Margin::symmetric(8, 4)).background_color(c.surface))
+            };
+            let tip = pick(
+                "Use \\n for a line break, \\t for a tab and \\\\ for a backslash",
+                "Usa \\n para salto de línea, \\t para tabulador y \\\\ para barra invertida",
+            );
+            let q = field_frame(
+                ui,
                 egui::TextEdit::singleline(&mut st.find.query)
                     .id(id.with("find-query"))
-                    .hint_text(pick("Find", "Buscar"))
-                    .desired_width(220.0),
-            );
+                    .hint_text(pick("Find…", "Buscar…")),
+            )
+            .on_hover_text(tip);
             q.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SearchInput, true, pick("Find", "Buscar")));
             if st.find.focus_query {
                 q.request_focus();
@@ -714,50 +738,80 @@ fn find_bar(ui: &mut Ui, id: Id, st: &mut State, text: &mut String, now: f64, ch
                     close = true;
                 }
             }
-            let count = if st.find.query.is_empty() {
-                String::new()
+            let (count, ink) = if st.find.query.is_empty() {
+                (String::new(), c.text_muted)
             } else if n == 0 {
-                pick("No results", "Sin resultados").to_string()
+                (pick("No matches", "Sin coincidencias").to_string(), c.warning)
             } else {
-                format!("{} {} {n}", st.find.current + 1, pick("of", "de"))
+                (format!("{}/{n}", st.find.current + 1), c.text_muted)
             };
-            ui.weak(count);
-            if ui.small_button(pick("Previous", "Anterior")).on_hover_text("Mayús+Intro / Mayús+F3").clicked() {
+            ui.add_sized(
+                egui::vec2(if n == 0 && !st.find.query.is_empty() { 110.0 } else { 52.0 }, 20.0),
+                egui::Label::new(egui::RichText::new(count).small().color(ink)),
+            );
+            let has = n > 0;
+            if icons::icon_button(ui, Icon::ChevronUp, pick("Previous (Shift+Enter)", "Anterior (Mayús+Intro)"), has)
+                .clicked()
+            {
                 go = -1;
             }
-            if ui.small_button(pick("Next", "Siguiente")).on_hover_text("Intro / F3").clicked() {
+            if icons::icon_button(ui, Icon::ChevronDown, pick("Next (Enter)", "Siguiente (Intro)"), has).clicked() {
                 go = 1;
             }
             let mut case = st.find.case;
-            if ui.toggle_value(&mut case, "Aa").on_hover_text(pick("Match case", "Distinguir mayúsculas")).changed() {
+            let aa = egui::RichText::new("Aa").color(if case { c.accent } else { c.text });
+            if ui
+                .add(egui::Button::selectable(case, aa).corner_radius(4.0))
+                .on_hover_text(pick("Match case", "Distinguir mayúsculas"))
+                .clicked()
+            {
+                case = !case;
                 st.find.case = case;
             }
-            if !st.find.replace && ui.small_button(pick("Replace…", "Reemplazar…")).clicked() {
-                st.find.replace = true;
+            if ui.add(egui::Button::new(pick("Replace…", "Reemplazar…")).frame(false)).clicked() {
+                st.find.replace = !st.find.replace;
             }
-            if ui.small_button(pick("Close", "Cerrar")).on_hover_text("Esc").clicked() {
-                close = true;
-            }
-        });
-        if st.find.replace {
-            ui.horizontal(|ui| {
-                let w = ui.add(
+            if st.find.replace {
+                let w = field_frame(
+                    ui,
                     egui::TextEdit::singleline(&mut st.find.with)
                         .id(id.with("find-with"))
-                        .hint_text(pick("Replace with", "Reemplazar con"))
-                        .desired_width(220.0),
-                );
+                        .hint_text(pick("Replace with…", "Reemplazar con…")),
+                )
+                .on_hover_text(tip);
                 w.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::Role::TextInput, true, pick("Replace with", "Reemplazar con"))
                 });
-                if ui.small_button(pick("Replace", "Reemplazar")).clicked() {
+                if w.lost_focus() {
+                    let (enter, esc) = ui.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
+                    if enter {
+                        one = true;
+                        w.request_focus();
+                    } else if esc {
+                        close = true;
+                    }
+                }
+                let filled = egui::Button::new(egui::RichText::new(pick("Replace", "Reemplazar")).color(c.on_accent))
+                    .fill(c.accent)
+                    .corner_radius(4.0);
+                if ui.add_enabled(has, filled).clicked() {
                     one = true;
                 }
-                if ui.small_button(pick("Replace all", "Reemplazar todo")).clicked() {
+                let outline =
+                    egui::Button::new(egui::RichText::new(pick("Replace all", "Reemplazar todo")).color(c.accent))
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::new(1.0, c.accent))
+                        .corner_radius(4.0);
+                if ui.add_enabled(has, outline).clicked() {
                     all = true;
                 }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if icons::icon_button(ui, Icon::Close, pick("Close (Esc)", "Cerrar (Esc)"), true).clicked() {
+                    close = true;
+                }
             });
-        }
+        });
     });
     let (f3, shift_f3) = ui.input_mut(|i| {
         let back = i.consume_key(egui::Modifiers::SHIFT, Key::F3);
@@ -834,6 +888,8 @@ pub struct Hooks {
     pub spell: Option<Arc<crate::Speller>>,
     /// Dónde guardar las imágenes pegadas o soltadas sobre el editor.
     pub images: Option<Arc<dyn crate::ImageStore>>,
+    /// Las notas que puede enlazar `[[` (la carpeta o bóveda del documento).
+    pub notes: Option<Arc<dyn crate::NoteIndex>>,
     /// Zoom del documento (1.0 = la letra del tema); se acota a 50 %–300 %.
     pub zoom: Option<f32>,
 }
@@ -1113,7 +1169,8 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                     active |= focused || wanted.is_some();
                     let in_table = st.cell.is_some_and(|x| x.0 == c.uid) || st.cell_focus.is_some_and(|x| x.0 == c.uid);
                     // Una tabla editada como Markdown vuelve a cuadrícula al dejarla.
-                    if c.raw && !focused && wanted.is_none() {
+                    let picking = st.templates == Some(c.uid);
+                    if c.raw && !focused && wanted.is_none() && !picking {
                         c.raw = false;
                     }
                     let seen = y + c.height + g >= viewport.min.y - margin && y <= viewport.max.y + margin;
@@ -1134,6 +1191,7 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                         && let Some(c) = st.blocks.chunks.get_mut(i)
                         && !c.raw
                         && !focused
+                        && !picking
                         && r.accepts(&c.content)
                     {
                         if wanted.is_some() {
@@ -1320,9 +1378,62 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                     if focused && act.is_none() {
                         act = block_key(ui, fid, &st.blocks, i);
                     }
+                    // Un diagrama Mermaid en edición: el menú de plantillas (como la 1.x).
+                    let mut templated = false;
+                    if let Some(c) = st.blocks.chunks.get_mut(i)
+                        && (focused || picking)
+                        && crate::templates::is_mermaid(&c.content)
+                    {
+                        let (uid, open) = (c.uid, picking);
+                        let mut toggle = false;
+                        let mut chosen: Option<String> = None;
+                        ui.horizontal(|ui| {
+                            let pick = iurefficient_ui::lang::pick;
+                            let r = ui.button(format!("{}…", pick("Template", "Plantilla"))).on_hover_text(pick(
+                                "Replace the code with a template (Ctrl+Z undoes it)",
+                                "Cambiar el código por una plantilla (Ctrl+Z lo deshace)",
+                            ));
+                            toggle = r.clicked();
+                        });
+                        if open {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                egui::ScrollArea::vertical().max_height(260.0).id_salt(("tpl", uid)).show(ui, |ui| {
+                                    for (name, code) in crate::templates::mermaid() {
+                                        if ui.selectable_label(false, name).clicked() {
+                                            chosen = Some(code);
+                                        }
+                                    }
+                                });
+                            });
+                        }
+                        if let Some(code) = chosen {
+                            c.content = crate::templates::replace_code(&c.content, &code);
+                            st.templates = None;
+                            st.focus = Some((uid, 0));
+                            templated = true;
+                        } else if toggle {
+                            st.templates = if open { None } else { Some(uid) };
+                            if open {
+                                st.focus = Some((uid, 0));
+                            }
+                        }
+                    } else if picking && !focused {
+                        st.templates = None;
+                    }
                     let Some(c) = st.blocks.chunks.get_mut(i) else { break };
                     let hint = if only && c.content.is_empty() { hint } else { "" };
-                    let (changed, out) = field(ui, fid, &mut c.content, hint, 1, &style, skey, hooks.spell.as_deref());
+                    let (changed, out) = field(
+                        ui,
+                        fid,
+                        &mut c.content,
+                        hint,
+                        1,
+                        &style,
+                        skey,
+                        hooks.spell.as_deref(),
+                        hooks.notes.as_deref(),
+                        true,
+                    );
                     c.height = out.response.response.rect.height();
                     let mut ch = c.height;
                     // Un diagrama con error: el código y, debajo, qué falla.
@@ -1336,7 +1447,7 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                         let label = format!("{} {pos}", iurefficient_ui::lang::pick("Block", "Bloque"));
                         egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, label)
                     });
-                    if changed && act.is_none() {
+                    if (changed || templated) && act.is_none() {
                         let at = out.state.cursor.char_range().map_or(0, |r| r.primary.index.0);
                         act = Some(Act::Edited(i, at));
                     }
@@ -1484,7 +1595,7 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
     // La que nombra el anfitrión es siempre la de un campo de texto (nunca la de una imagen, un
     // diagrama o una tabla, que conservan sus propios nombres).
     let response = resp.unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()));
-    Output { changed, response }
+    Output { changed, response, link: crate::take_link(ui) }
 }
 
 /// Una edición que llega de fuera del editor (dictado por voz con IureVoz, enlaces

@@ -184,13 +184,13 @@ fn ctrl_f_finds_the_selection_and_counts() {
     select(&mut h, 3, 11);
     chord(&mut h, Modifiers::COMMAND, Key::F);
     h.run_steps(2);
-    assert!(h.query_by_label("1 de 3").is_some(), "la selección se busca, sin distinguir mayúsculas");
+    assert!(h.query_by_label("1/3").is_some(), "la selección se busca, sin distinguir mayúsculas");
     key(&mut h, Key::Enter);
     h.run_steps(2);
-    assert!(h.query_by_label("2 de 3").is_some(), "Intro: la siguiente");
+    assert!(h.query_by_label("2/3").is_some(), "Intro: la siguiente");
     h.get_by_label("Aa").click();
     h.run_steps(2);
-    assert!(h.query_by_label("1 de 2").is_some() || h.query_by_label("2 de 2").is_some(), "distinguiendo mayúsculas");
+    assert!(h.query_by_label("1/2").is_some() || h.query_by_label("2/2").is_some(), "distinguiendo mayúsculas");
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn escape_selects_the_match_even_far_below() {
     chord(&mut h, Modifiers::COMMAND, Key::F);
     h.get_by_label("Buscar").type_text("aguja");
     h.run_steps(3);
-    assert!(h.query_by_label("1 de 1").is_some());
+    assert!(h.query_by_label("1/1").is_some());
     key(&mut h, Key::Escape);
     h.run_steps(3);
     // La coincidencia quedó seleccionada en su bloque: teclear la cambia.

@@ -636,3 +636,119 @@ fn dropping_an_image_file_copies_and_inserts_it() {
     assert!(h.query_by_label("Aquí solo se pueden soltar imágenes.").is_some());
     assert!(!h.state().text.contains("notas"));
 }
+
+// --- Menús de `/` y `[[`, enlaces y plantillas (como IureEditor 1.x) ---
+
+struct Notes;
+
+impl iure_doc_ui::NoteIndex for Notes {
+    fn notes(&self) -> Vec<String> {
+        vec!["Acta de junta".into(), "Clientes/Altamira".into()]
+    }
+}
+
+struct LinkState {
+    text: String,
+    link: Option<String>,
+}
+
+fn menus_harness(text: &str) -> Harness<'static, LinkState> {
+    let hooks = iure_doc_ui::Hooks { notes: Some(std::sync::Arc::new(Notes)), ..Default::default() };
+    Harness::builder().with_size(egui::vec2(600.0, 500.0)).build_ui_state(
+        move |ui, st: &mut LinkState| {
+            let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("mn"), &mut st.text, "Escribe", hooks.clone());
+            if let Some(l) = out.link {
+                st.link = Some(l);
+            }
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        LinkState { text: text.to_string(), link: None },
+    )
+}
+
+fn menus_cursor_at(h: &mut Harness<'static, LinkState>, at: usize) {
+    if h.ctx.memory(|m| m.focused()).is_none() {
+        h.get_by_label("bloques").focus();
+        h.run();
+    }
+    let ctx = h.ctx.clone();
+    let Some(id) = ctx.memory(|m| m.focused()) else { panic!("sin foco") };
+    let mut st = TextEditState::load(&ctx, id).unwrap_or_default();
+    st.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
+    st.store(&ctx, id);
+    h.run();
+}
+
+#[test]
+fn slash_opens_the_menu_and_enter_runs_the_command() {
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let mut h = menus_harness("/menta\n");
+    menus_cursor_at(&mut h, 6);
+    h.run();
+    assert!(h.query_by_label("Mapa mental").is_some(), "el menú se ve junto al cursor");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().text.contains("> [!MINDMAP] Tema\n> - Idea A"), "{:?}", h.state().text);
+    assert!(!h.state().text.contains("/menta"));
+}
+
+#[test]
+fn slash_menu_closes_with_escape_and_arrows_choose() {
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let mut h = menus_harness("/tít\n");
+    menus_cursor_at(&mut h, 4);
+    h.key_press(Key::ArrowDown);
+    h.run();
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().text, "## \n", "la segunda opción: Título 2");
+    let mut h = menus_harness("/tít\n");
+    menus_cursor_at(&mut h, 4);
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(h.query_by_label("Título 1").is_none(), "Esc lo cierra");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().text.starts_with("/tít"), "Intro ya es un salto normal: {:?}", h.state().text);
+}
+
+#[test]
+fn double_brackets_link_notes_and_ctrl_click_opens_them() {
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let mut h = menus_harness("Ver [[alta\n");
+    menus_cursor_at(&mut h, 10);
+    assert!(h.query_by_label("Altamira").is_some());
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().text, "Ver [[Altamira]]\n");
+    // Ctrl+clic en el enlace (con el cursor en otra línea los corchetes no se ven).
+    let mut h = menus_harness("Ver [[Acta de junta|el acta]] hoy\n\notro\n");
+    h.run();
+    let r = h.get_all_by_role(egui::accesskit::Role::MultilineTextInput).next().map(|n| n.rect()).unwrap();
+    h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+    h.run();
+    h.event(egui::Event::PointerMoved(egui::pos2(r.left() + 60.0, r.center().y)));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: egui::pos2(r.left() + 60.0, r.center().y),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::COMMAND,
+        });
+    }
+    h.run_steps(3);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    assert_eq!(h.state().link.as_deref(), Some("[[Acta de junta]]"));
+}
+
+#[test]
+fn mermaid_blocks_offer_templates() {
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let mut h = menus_harness("```mermaid\nflowchart TD\n```\n");
+    menus_cursor_at(&mut h, 3);
+    h.get_by_label("Plantilla…").click();
+    h.run_steps(2);
+    h.get_by_label("Pastel").click();
+    h.run_steps(3);
+    assert!(h.state().text.starts_with("```mermaid\npie title Distribución"), "{:?}", h.state().text);
+}

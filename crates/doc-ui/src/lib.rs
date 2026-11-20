@@ -50,7 +50,9 @@ mod images;
 mod paste;
 mod span;
 pub mod spell;
+mod suggest;
 mod table_ui;
+mod templates;
 pub use blocks::{
     ExternalEdit, Hooks, apply_external, caret_offset, focus_offset, show as show_blocks,
     show_hooks as show_blocks_hooks, show_with as show_blocks_with,
@@ -61,6 +63,8 @@ pub use image_store::{FolderImages, ImageStore, PastedImage};
 pub use images::{LocalImages, Renderers};
 pub use paste::{PasteSource, SystemClipboard};
 pub use spell::Speller;
+pub use suggest::NoteIndex;
+pub use templates::mermaid as mermaid_templates;
 
 /// Colores y letra del editor.
 #[derive(Clone, Debug, PartialEq)]
@@ -361,7 +365,65 @@ fn formats(text: &str) -> Vec<Fmt> {
             _ => {}
         }
     }
+    // Enlaces entre notas (`[[nota#título|alias]]`, fuera del código): se ve lo que se lee (el
+    // alias o el destino) como enlace; los corchetes y el destino con alias son marcas.
+    for (s0, e0, shown) in wiki_links(text) {
+        if f.get(s0).is_some_and(|x| x.code) {
+            continue;
+        }
+        for (k, x) in f.iter_mut().enumerate().take(e0).skip(s0) {
+            x.link = true;
+            if k < shown || k + 2 >= e0 {
+                inline_marker(x);
+            }
+        }
+    }
     f
+}
+
+/// Enlaces `[[…]]` de una línea: (inicio, fin, dónde empieza lo que se ve), en bytes. Con `![[`, el
+/// `!` va dentro.
+pub(crate) fn wiki_links(text: &str) -> Vec<(usize, usize, usize)> {
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(i) = text.get(from..).and_then(|t| t.find("[[")) {
+        let s0 = from + i;
+        let inner_start = s0 + 2;
+        let Some(len) = text.get(inner_start..).and_then(|t| t.find("]]")) else { break };
+        let inner = text.get(inner_start..inner_start + len).unwrap_or("");
+        if inner.is_empty() || inner.contains(['[', ']', '\n']) {
+            from = inner_start;
+            continue;
+        }
+        let e0 = inner_start + len + 2;
+        let start = if s0 > 0 && text.get(s0 - 1..s0) == Some("!") { s0 - 1 } else { s0 };
+        let shown = inner.find('|').map_or(inner_start, |p| inner_start + p + 1);
+        out.push((start, e0, shown));
+        if out.len() >= 1_000 {
+            break;
+        }
+        from = e0;
+    }
+    out
+}
+
+/// El enlace bajo el byte `at`: el destino de un `[[…]]` (sin el alias) o la dirección de un
+/// `[texto](dirección)`.
+pub(crate) fn link_at(text: &str, at: usize) -> Option<String> {
+    if let Some((s0, e0, _)) = wiki_links(text).into_iter().find(|(s0, e0, _)| (*s0..*e0).contains(&at)) {
+        let inner = text.get(s0..e0)?.trim_start_matches('!').trim_start_matches("[[").trim_end_matches("]]");
+        let target = inner.split('|').next().unwrap_or(inner).trim();
+        return (!target.is_empty()).then(|| format!("[[{target}]]"));
+    }
+    let parser = pulldown_cmark::Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter();
+    for (e, r) in parser {
+        if let Event::Start(Tag::Link { dest_url, .. }) = e
+            && r.contains(&at)
+        {
+            return Some(dest_url.to_string());
+        }
+    }
+    None
 }
 
 /// Color de una clase de sintaxis, con el tema: palabras clave en el acento, comentarios tenues.
@@ -578,6 +640,19 @@ pub struct Output {
     /// El texto cambió (teclas o atajos del editor).
     pub changed: bool,
     pub response: egui::Response,
+    /// Ctrl+clic en un enlace: `[[nota#título]]` (sin alias) o la dirección de un enlace Markdown.
+    /// Lo abre la app.
+    pub link: Option<String>,
+}
+
+/// Dónde deja el campo el enlace pulsado hasta que lo recoge el editor.
+pub(crate) fn link_slot() -> Id {
+    Id::unique("iure-doc-link-clicked")
+}
+
+/// El enlace pulsado en este cuadro (y se olvida).
+pub(crate) fn take_link(ui: &Ui) -> Option<String> {
+    ui.data_mut(|d| d.remove_temp::<String>(link_slot()))
 }
 
 /// Consume un atajo por su tecla lógica o física (Ctrl+Mayús+7 en un teclado donde Mayús+7 es
@@ -664,8 +739,8 @@ fn editor_key(ui: &Ui, text: &str, sel: (usize, usize)) -> Option<Edit> {
 /// El editor. `id` identifica su estado (cursor, deshacer) entre cuadros.
 pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
     let style = EditorStyle::from_ui(ui);
-    let (changed, out) = field(ui, id, text, hint, 16, &style, style_key(&style), None);
-    Output { changed, response: out.response.response }
+    let (changed, out) = field(ui, id, text, hint, 16, &style, style_key(&style), None, None, false);
+    Output { changed, response: out.response.response, link: take_link(ui) }
 }
 
 /// Huella del estilo (parte de la llave de la caché del dibujo).
@@ -686,8 +761,22 @@ pub(crate) fn field(
     style: &EditorStyle,
     style_key: u64,
     spell: Option<&Speller>,
+    notes: Option<&dyn NoteIndex>,
+    menus: bool,
 ) -> (bool, egui::text_edit::TextEditOutput) {
     let mut changed = false;
+    // Los menús de `/` y `[[`: sus teclas antes que las del campo.
+    if menus
+        && ui.memory(|m| m.has_focus(id))
+        && let Some(mut state) = TextEditState::load(ui.ctx(), id)
+        && let Some(range) = state.cursor.char_range()
+        && let Some((t, c)) = suggest::keys(ui, id, text, range.primary.index.0, notes)
+    {
+        *text = t;
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(c))));
+        state.store(ui.ctx(), id);
+        changed = true;
+    }
     if ui.memory(|m| m.has_focus(id))
         && let Some(mut state) = TextEditState::load(ui.ctx(), id)
         && let Some(range) = state.cursor.char_range()
@@ -795,6 +884,25 @@ pub(crate) fn field(
     }
     if let Some(sp) = spell {
         changed |= spell_menu(ui, id, text, sp, &out);
+    }
+    // Ctrl+clic en un enlace: lo abre la app.
+    if out.response.clicked()
+        && ui.input(|i| i.modifiers.command)
+        && let Some(pp) = ui.input(|i| i.pointer.interact_pos())
+    {
+        let cc = out.galley.cursor_from_pos(pp - out.galley_pos).index.0;
+        let at = text.char_indices().nth(cc).map_or(text.len(), |(b, _)| b);
+        if let Some(l) = link_at(text, at).or_else(|| link_at(text, at.saturating_sub(1))) {
+            ui.data_mut(|d| d.insert_temp(link_slot(), l));
+        }
+    }
+    if menus && let Some((t, c)) = suggest::popup(ui, id, &out, text, notes) {
+        *text = t;
+        if let Some(mut state) = TextEditState::load(ui.ctx(), id) {
+            state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(c))));
+            state.store(ui.ctx(), id);
+        }
+        changed = true;
     }
     (changed, out)
 }

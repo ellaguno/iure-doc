@@ -113,10 +113,8 @@ pub fn render_math(
     let size = page.frame.size();
     let (wp, hp) = (size.x.to_pt() as f32, size.y.to_pt() as f32);
     let scale = scale.clamp(0.5, 4.0).min(MAX_SIDE / wp.max(hp).max(1.0));
-    let opts = typst_render::RenderOptions {
-        pixel_per_pt: typst::utils::Scalar::new(f64::from(scale)),
-        ..Default::default()
-    };
+    let opts =
+        typst_render::RenderOptions { pixel_per_pt: typst::utils::Scalar::new(f64::from(scale)), ..Default::default() };
     let pix = typst_render::render(page, &opts);
     let rgba: Vec<u8> = pix
         .pixels()

@@ -752,3 +752,17 @@ fn mermaid_blocks_offer_templates() {
     h.run_steps(3);
     assert!(h.state().text.starts_with("```mermaid\npie title Distribución"), "{:?}", h.state().text);
 }
+
+/// Regresión: una lista «suelta» (línea en blanco entre elementos, como muchos índices) se veía con
+/// un renglón vacío entero entre cada elemento.
+#[test]
+fn loose_lists_are_not_double_spaced() {
+    let height = |t: &str| {
+        let mut h = blocks_harness(t);
+        h.run();
+        h.get_all_by_role(egui::accesskit::Role::MultilineTextInput).nth(1).map(|n| n.rect().height()).unwrap()
+    };
+    let tight = height("Intro\n\n- [Uno](#a)\n    - [Dos](#b)\n    - [Tres](#c)\n\nFin\n");
+    let loose = height("Intro\n\n- [Uno](#a)\n\n    - [Dos](#b)\n\n    - [Tres](#c)\n\nFin\n");
+    assert!(loose < tight * 1.4, "suelta {loose} frente a compacta {tight}");
+}

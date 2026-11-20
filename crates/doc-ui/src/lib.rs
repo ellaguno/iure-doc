@@ -147,6 +147,8 @@ struct Fmt {
     math: bool,
     /// Hueco de la fórmula dibujada número `n - 1` de [`MathImg`] (0: ninguno).
     math_slot: u16,
+    /// Línea vacía dentro de un bloque (entre elementos de una lista «suelta»): poco alto.
+    blank: bool,
 }
 
 /// Una fórmula en línea ya dibujada: su LaTeX (sin `$`), la textura y su tamaño en puntos.
@@ -742,6 +744,13 @@ pub(crate) fn layout_job_full(
             && (matches!(x.deco, DECO_BULLET | DECO_TASK | DECO_TASK_DONE | DECO_QUOTE | DECO_TASK_DASH)
                 || ((x.deco == DECO_RULE || x.deco >= DECO_CALLOUT) && !on_line));
     }
+    // Líneas vacías dentro del bloque (fuera del código): un poco de aire, no un renglón entero.
+    let bytes = text.as_bytes();
+    for (i, x) in f.iter_mut().enumerate() {
+        if bytes.get(i) == Some(&b'\n') && i > 0 && bytes.get(i - 1) == Some(&b'\n') && !x.code {
+            x.blank = true;
+        }
+    }
     // Fórmulas en línea dibujadas, fuera de la línea del cursor: el primer `$` hace de hueco y el
     // resto se oculta.
     let mut holes: Vec<(usize, usize, u16)> = Vec::new();
@@ -807,6 +816,11 @@ pub(crate) fn layout_job_full(
                 extra_letter_spacing: m.size.x + 2.0,
                 line_height: Some((m.size.y + 4.0).max(s.size * LINE_SPACING).round()),
                 valign: egui::Align::Center,
+                ..Default::default()
+            },
+            None if fmt.blank => TextFormat {
+                font_id: FontId::new(s.size * 0.4, s.body_family.clone()),
+                line_height: Some((s.size * 0.45).round()),
                 ..Default::default()
             },
             None => text_format(fmt, s),

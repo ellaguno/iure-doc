@@ -149,6 +149,36 @@ const DECO_TASK_DONE: u8 = 3;
 const DECO_QUOTE: u8 = 4;
 /// Cerca de un bloque de código: se pliega cuando el bloque no tiene el cursor.
 const DECO_FENCE: u8 = 5;
+/// Marca de un aviso (`[!NOTE]`…): fuera de su línea se dibuja su título. Uno por tipo, en el
+/// orden de [`CALLOUTS`].
+const DECO_CALLOUT: u8 = 10;
+
+/// Tipos de aviso (como GitHub y la 1.x): marca, título en inglés y en español.
+const CALLOUTS: [(&str, &str, &str); 5] = [
+    ("NOTE", "Note", "Nota"),
+    ("TIP", "Tip", "Consejo"),
+    ("IMPORTANT", "Important", "Importante"),
+    ("WARNING", "Warning", "Advertencia"),
+    ("CAUTION", "Caution", "Precaución"),
+];
+
+/// El tipo de aviso con que empieza una cita (`> [!NOTE]`): su índice en [`CALLOUTS`].
+fn callout_of(block: &str) -> Option<usize> {
+    let t = block.trim_start().strip_prefix('>')?.trim_start().strip_prefix("[!")?;
+    let tag: String = t.chars().take_while(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_uppercase();
+    CALLOUTS.iter().position(|(k, _, _)| *k == tag)
+}
+
+/// Color de cada tipo de aviso.
+fn callout_color(i: usize, s: &EditorStyle) -> Color32 {
+    match i {
+        0 => s.accent,
+        1 => Color32::from_rgb(0x1a, 0x7f, 0x37),
+        2 => Color32::from_rgb(0x82, 0x50, 0xdf),
+        3 => Color32::from_rgb(0x9a, 0x67, 0x00),
+        _ => Color32::from_rgb(0xcf, 0x22, 0x2e),
+    }
+}
 const DECO_RULE: u8 = 6;
 /// El `- ` delante de una casilla: invisible, con su ancho (las tareas se alinean con las viñetas).
 const DECO_TASK_DASH: u8 = 7;
@@ -344,6 +374,17 @@ fn formats(text: &str) -> Vec<Fmt> {
             Event::Start(Tag::BlockQuote(_)) => {
                 set(r.clone(), &|x| x.quote = true);
                 // Los `>` de cada línea.
+                // Un aviso: `[!TIPO]` de la primera línea, en negrita (y fuera de su línea, su título).
+                if let Some(k) = callout_of(slice)
+                    && let Some(open) = slice.find("[!")
+                    && let Some(close) = slice.get(open..).and_then(|t| t.find(']'))
+                {
+                    let deco = DECO_CALLOUT + k as u8;
+                    set(r.start + open..r.start + open + close + 1, &|x| {
+                        x.bold = true;
+                        x.deco = deco;
+                    });
+                }
                 let mut at = r.start;
                 for line in slice.split_inclusive('\n') {
                     let lead = line.len() - line.trim_start().len();
@@ -590,7 +631,7 @@ pub(crate) fn layout_job_spell(
         x.hidden = (x.inline && !on_line) || (x.deco == DECO_FENCE && !focused);
         x.concealed = !x.hidden
             && (matches!(x.deco, DECO_BULLET | DECO_TASK | DECO_TASK_DONE | DECO_QUOTE | DECO_TASK_DASH)
-                || (x.deco == DECO_RULE && !on_line));
+                || ((x.deco == DECO_RULE || x.deco >= DECO_CALLOUT) && !on_line));
     }
     // Las marcas que se dibujan, en tramos.
     let mut decos: Vec<Deco> = Vec::new();
@@ -977,6 +1018,12 @@ fn paint_decos(
             );
         }
     }
+    // Un aviso: fondo tenue del color de su tipo (detrás del texto) y la barra de ese color.
+    let callout = callout_of(text);
+    let bar = callout.map_or(s.muted.gamma_multiply(0.6), |k| callout_color(k, s));
+    if let Some(k) = callout {
+        p.set(code_bg, egui::Shape::rect_filled(field, 4.0, callout_color(k, s).gamma_multiply(0.08)));
+    }
     let quotes: Vec<egui::Rect> =
         decos.iter().filter(|d| d.kind == DECO_QUOTE).map(|d| span_rect(out, text, d.start, d.end)).collect();
     for (k, r) in quotes.iter().enumerate() {
@@ -984,10 +1031,21 @@ fn paint_decos(
         // que se parten quedan dentro.
         let bottom = quotes.get(k + 1).map_or(out.galley_pos.y + out.galley.size().y, |n| n.top());
         let x = r.left() + 1.5;
-        p.line_segment(
-            [egui::pos2(x, r.top()), egui::pos2(x, bottom.max(r.bottom()))],
-            Stroke::new(3.0, s.muted.gamma_multiply(0.6)),
-        );
+        p.line_segment([egui::pos2(x, r.top()), egui::pos2(x, bottom.max(r.bottom()))], Stroke::new(3.0, bar));
+    }
+    // El título del aviso en lugar de `[!TIPO]`.
+    for d in decos.iter().filter(|d| d.kind >= DECO_CALLOUT) {
+        let k = usize::from(d.kind - DECO_CALLOUT);
+        if let Some((_, en, es)) = CALLOUTS.get(k) {
+            let r = span_rect(out, text, d.start, d.end);
+            p.text(
+                r.left_center(),
+                egui::Align2::LEFT_CENTER,
+                iurefficient_ui::lang::pick(en, es),
+                FontId::new(s.size, s.bold_family.clone()),
+                callout_color(k, s),
+            );
+        }
     }
     for d in decos {
         match d.kind {
@@ -1227,6 +1285,21 @@ mod tests {
     }
 
     /// WYSIWYG: viñetas, casillas, citas, cercas y reglas son marcas dibujadas; el texto no cambia.
+    #[test]
+    fn callouts_show_their_title_off_their_line() {
+        let s = test_style();
+        assert_eq!(callout_of("> [!tip] Ojo\n> texto"), Some(1));
+        assert_eq!(callout_of("> [!MINDMAP] Tema"), None, "los mapas son diagramas");
+        assert_eq!(callout_of("> cita"), None);
+        let t = "> [!WARNING]\n> Plazo el lunes.";
+        let (_, decos) = layout_job_spell(t, &s, 400.0, None, None, None);
+        let d = decos.iter().find(|d| d.kind >= DECO_CALLOUT).copied();
+        assert_eq!(d.map(|d| (d.kind - DECO_CALLOUT, t.get(d.start..d.end))), Some((3, Some("[!WARNING]"))));
+        // Con el cursor en esa línea se ve (y se edita) la marca.
+        let (_, decos) = layout_job_spell(t, &s, 400.0, Some(0..12), None, None);
+        assert!(decos.iter().all(|d| d.kind < DECO_CALLOUT));
+    }
+
     #[test]
     fn block_marks_are_drawn_not_shown() {
         let s = test_style();

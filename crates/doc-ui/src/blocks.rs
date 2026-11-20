@@ -500,6 +500,13 @@ fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
     })
 }
 
+/// El dibujo de un diagrama junto a su texto, a lo más `max_w` de ancho.
+fn side_image(ui: &mut Ui, tex: &egui::TextureHandle, size: egui::Vec2, max_w: f32) -> egui::Response {
+    let k = (max_w / size.x.max(1.0)).min(MAX_IMAGE_HEIGHT / size.y.max(1.0)).min(1.0);
+    ui.add(egui::Image::new((tex.id(), size * k)).sense(egui::Sense::click()))
+        .on_hover_text(iurefficient_ui::lang::pick("Right-click: options", "Clic derecho: opciones"))
+}
+
 /// La tabla de un bloque, si lo es (y `pulldown-cmark` también la lee como tabla).
 fn table_of(content: &str) -> Option<Grid> {
     use pulldown_cmark::{Event, Options, Parser, Tag};
@@ -1195,6 +1202,7 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                         && !focused
                         && !picking
                         && r.accepts(&c.content)
+                        && r.placement(&c.content) == crate::Placement::Replace
                     {
                         if wanted.is_some() {
                             // Entrar con las flechas: se edita el código.
@@ -1251,6 +1259,24 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                                             c.raw = true;
                                         }
                                         st.focus = Some((uid, 0));
+                                    }
+                                    // Clic derecho: las opciones del diagrama (las da la app).
+                                    let content =
+                                        st.blocks.chunks.get(i).map(|c| c.content.clone()).unwrap_or_default();
+                                    let mut new_block: Option<String> = None;
+                                    resp.context_menu(|ui| {
+                                        if let Some(n) = r.menu(ui, &content) {
+                                            new_block = Some(n);
+                                            ui.close();
+                                        }
+                                    });
+                                    if let Some(n) = new_block
+                                        && let Some(c) = st.blocks.chunks.get_mut(i)
+                                    {
+                                        c.content = n;
+                                        if act.is_none() {
+                                            act = Some(Act::Edited(i, 0));
+                                        }
                                     }
                                     Some(resp)
                                 }
@@ -1433,22 +1459,89 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                             }
                         }
                     }
+                    // Un diagrama que se ve junto a su texto (un mapa mental con su lista): el dibujo
+                    // debajo o a la derecha, siempre al día con lo que se escribe.
+                    let place = match (diagrams.as_ref(), st.blocks.chunks.get(i)) {
+                        (Some(r), Some(c)) if !c.raw && r.accepts(&c.content) => r.placement(&c.content),
+                        _ => crate::Placement::Replace,
+                    };
+                    let mut side: Option<(egui::TextureHandle, egui::Vec2)> = None;
+                    if place != crate::Placement::Replace
+                        && let (Some(r), Some(c)) = (diagrams.as_ref(), st.blocks.chunks.get(i))
+                    {
+                        match st.diagrams.get(ui.ctx(), r, &c.content) {
+                            View::Image(t, sz) => side = Some((t, sz)),
+                            View::Failed(e) => diagram_error = Some(e),
+                            View::Pending => {}
+                        }
+                    }
                     let Some(c) = st.blocks.chunks.get_mut(i) else { break };
                     let hint = if only && c.content.is_empty() { hint } else { "" };
-                    let (changed, out) = field(
-                        ui,
-                        fid,
-                        &mut c.content,
-                        hint,
-                        1,
-                        &style,
-                        skey,
-                        hooks.spell.as_deref(),
-                        hooks.notes.as_deref(),
-                        true,
-                        &maths,
-                    );
+                    let mut side_resp: Option<egui::Response> = None;
+                    let run_field = |ui: &mut Ui, content: &mut String| {
+                        field(
+                            ui,
+                            fid,
+                            content,
+                            hint,
+                            1,
+                            &style,
+                            skey,
+                            hooks.spell.as_deref(),
+                            hooks.notes.as_deref(),
+                            true,
+                            &maths,
+                        )
+                    };
+                    let (changed, out) = match (&side, place) {
+                        (Some((tex, sz)), crate::Placement::Right) => {
+                            let total = ui.available_width();
+                            let left = (total * 0.4).clamp(160.0, total);
+                            let (res, img) = ui
+                                .horizontal_top(|ui| {
+                                    let res = ui
+                                        .allocate_ui(egui::vec2(left, 0.0), |ui| {
+                                            ui.set_width(left);
+                                            run_field(ui, &mut c.content)
+                                        })
+                                        .inner;
+                                    let img = side_image(ui, tex, *sz, (total - left - 12.0).max(80.0));
+                                    (res, img)
+                                })
+                                .inner;
+                            side_resp = Some(img);
+                            res
+                        }
+                        (Some((tex, sz)), _) => {
+                            let res = run_field(ui, &mut c.content);
+                            side_resp = Some(side_image(ui, tex, *sz, width));
+                            res
+                        }
+                        _ => run_field(ui, &mut c.content),
+                    };
                     c.height = out.response.response.rect.height();
+                    if let Some(img) = &side_resp {
+                        c.height = if place == crate::Placement::Right {
+                            c.height.max(img.rect.height())
+                        } else {
+                            c.height + img.rect.height()
+                        };
+                        // Clic derecho sobre el dibujo: sus opciones.
+                        if let Some(r) = diagrams.as_ref() {
+                            let content = c.content.clone();
+                            let mut new_block: Option<String> = None;
+                            img.context_menu(|ui| {
+                                if let Some(n) = r.menu(ui, &content) {
+                                    new_block = Some(n);
+                                    ui.close();
+                                }
+                            });
+                            if let Some(n) = new_block {
+                                c.content = n;
+                                templated = true;
+                            }
+                        }
+                    }
                     let mut ch = c.height;
                     // Un diagrama con error: el código y, debajo, qué falla.
                     if let Some(e) = &diagram_error {

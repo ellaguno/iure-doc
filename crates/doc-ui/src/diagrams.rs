@@ -32,6 +32,27 @@ pub trait DiagramRenderer: Send + Sync {
     /// Dibuja el bloque a `scale` píxeles por punto. Puede tardar: se llama en otro hilo. Los
     /// errores van en lenguaje humano (se muestran debajo del código).
     fn render(&self, block: &str, scale: f32) -> Result<DiagramImage, String>;
+    /// Dónde va el dibujo respecto del texto del bloque (un mapa mental puede verse con su lista).
+    fn placement(&self, _block: &str) -> Placement {
+        Placement::Replace
+    }
+    /// Menú de clic derecho sobre el dibujo (opciones del diagrama). Devuelve el bloque nuevo si se
+    /// eligió algo.
+    fn menu(&self, _ui: &mut egui::Ui, _block: &str) -> Option<String> {
+        None
+    }
+}
+
+/// Dónde se ve el dibujo de un bloque.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Placement {
+    /// En lugar del texto (un clic lo edita).
+    #[default]
+    Replace,
+    /// El texto y, debajo, el dibujo.
+    Below,
+    /// El texto a la izquierda y el dibujo a la derecha.
+    Right,
 }
 
 /// Diagramas guardados como mucho.

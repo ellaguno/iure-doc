@@ -57,7 +57,7 @@ pub use blocks::{
     ExternalEdit, Hooks, apply_external, caret_offset, focus_offset, selection, show as show_blocks,
     show_hooks as show_blocks_hooks, show_with as show_blocks_with,
 };
-pub use diagrams::{DiagramImage, DiagramRenderer};
+pub use diagrams::{DiagramImage, DiagramRenderer, Placement};
 pub use highlight::wait_ready as wait_highlighting;
 pub use image_store::{FolderImages, ImageStore, PastedImage};
 pub use images::{LocalImages, Renderers};
@@ -423,6 +423,37 @@ fn formats(text: &str) -> Vec<Fmt> {
                 }
             }
             Event::Start(Tag::BlockQuote(_)) => {
+                // Un mapa mental (`> [!MINDMAP…] Centro` y su lista): se ve como lista, sin el estilo
+                // de cita; la marca y los `>` se ocultan fuera de su línea.
+                let mind = slice
+                    .trim_start()
+                    .trim_start_matches('>')
+                    .trim_start()
+                    .to_ascii_uppercase()
+                    .starts_with("[!MINDMAP");
+                if mind {
+                    if let Some(open) = slice.find("[!")
+                        && let Some(close) = slice.get(open..).and_then(|t| t.find(']'))
+                    {
+                        let end = open + close + 1;
+                        let sp = slice.get(end..).map_or(0, |t| t.len() - t.trim_start_matches(' ').len());
+                        set(r.start + open..r.start + end + sp, &inline_marker);
+                        // El centro, en negrita.
+                        let line_end = slice.find('\n').unwrap_or(slice.len());
+                        set(r.start + end + sp..r.start + line_end, &|x| x.bold = true);
+                    }
+                    let mut at = r.start;
+                    for line in slice.split_inclusive('\n') {
+                        let lead = line.len() - line.trim_start().len();
+                        let t = line.trim_start();
+                        if t.starts_with('>') {
+                            let n = if t.starts_with("> ") { 2 } else { 1 };
+                            set(at + lead..at + lead + n, &inline_marker);
+                        }
+                        at += line.len();
+                    }
+                    continue;
+                }
                 set(r.clone(), &|x| x.quote = true);
                 // Los `>` de cada línea.
                 // Un aviso: `[!TIPO]` de la primera línea, en negrita (y fuera de su línea, su título).

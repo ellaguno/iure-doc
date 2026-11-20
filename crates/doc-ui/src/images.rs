@@ -228,6 +228,14 @@ impl DiagramRenderer for Renderers {
             None => Err(pick("Nothing here can draw this block.", "Nada aquí sabe dibujar este bloque.").into()),
         }
     }
+
+    fn placement(&self, block: &str) -> crate::diagrams::Placement {
+        self.0.iter().find(|r| r.accepts(block)).map(|r| r.placement(block)).unwrap_or_default()
+    }
+
+    fn menu(&self, ui: &mut egui::Ui, block: &str) -> Option<String> {
+        self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.menu(ui, block))
+    }
 }
 
 #[cfg(test)]

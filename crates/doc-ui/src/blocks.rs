@@ -890,6 +890,8 @@ pub struct Hooks {
     pub images: Option<Arc<dyn crate::ImageStore>>,
     /// Las notas que puede enlazar `[[` (la carpeta o bóveda del documento).
     pub notes: Option<Arc<dyn crate::NoteIndex>>,
+    /// Quién dibuja las fórmulas en línea (`$…$`; recibe `$latex$`). Sin él se ven como código.
+    pub math: Option<Arc<dyn DiagramRenderer>>,
     /// Zoom del documento (1.0 = la letra del tema); se acota a 50 %–300 %.
     pub zoom: Option<f32>,
 }
@@ -1420,6 +1422,17 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                     } else if picking && !focused {
                         st.templates = None;
                     }
+                    // Las fórmulas en línea del bloque que ya están dibujadas.
+                    let mut maths: Vec<crate::MathImg> = Vec::new();
+                    if let (Some(r), Some(c)) = (hooks.math.as_ref(), st.blocks.chunks.get(i))
+                        && c.content.contains('$')
+                    {
+                        for latex in crate::inline_maths(&c.content) {
+                            if let View::Image(tex, size) = st.diagrams.get(ui.ctx(), r, &format!("${latex}$")) {
+                                maths.push(crate::MathImg { latex, tex: tex.id(), size });
+                            }
+                        }
+                    }
                     let Some(c) = st.blocks.chunks.get_mut(i) else { break };
                     let hint = if only && c.content.is_empty() { hint } else { "" };
                     let (changed, out) = field(
@@ -1433,6 +1446,7 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                         hooks.spell.as_deref(),
                         hooks.notes.as_deref(),
                         true,
+                        &maths,
                     );
                     c.height = out.response.response.rect.height();
                     let mut ch = c.height;

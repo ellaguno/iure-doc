@@ -143,6 +143,31 @@ struct Fmt {
     fg: u32,
     /// Resaltado (`<mark>`): `0x01RRGGBB`, 0 sin resaltado.
     bg: u32,
+    /// Fórmula en línea (`$…$`).
+    math: bool,
+    /// Hueco de la fórmula dibujada número `n - 1` de [`MathImg`] (0: ninguno).
+    math_slot: u16,
+}
+
+/// Una fórmula en línea ya dibujada: su LaTeX (sin `$`), la textura y su tamaño en puntos.
+#[derive(Clone, Debug)]
+pub(crate) struct MathImg {
+    pub latex: String,
+    pub tex: egui::TextureId,
+    pub size: egui::Vec2,
+}
+
+/// Las fórmulas en línea (`$…$`) de un bloque, sin los `$`.
+pub(crate) fn inline_maths(text: &str) -> Vec<String> {
+    let opts = Options::ENABLE_MATH;
+    Parser::new_ext(text, opts)
+        .filter_map(|e| match e {
+            Event::InlineMath(m) => Some(m.trim().to_string()),
+            _ => None,
+        })
+        .filter(|m| !m.is_empty())
+        .take(64)
+        .collect()
 }
 
 /// `#RRGGBB` de una etiqueta (`… color: #RRGGBB …`) como `0x01RRGGBB`.
@@ -168,6 +193,8 @@ const DECO_FENCE: u8 = 5;
 /// Marca de un aviso (`[!NOTE]`…): fuera de su línea se dibuja su título. Uno por tipo, en el
 /// orden de [`CALLOUTS`].
 const DECO_CALLOUT: u8 = 10;
+/// Hueco de una fórmula en línea (su número en `level`, desde 1).
+const DECO_MATH: u8 = 9;
 
 /// Tipos de aviso (como GitHub y la 1.x): marca, título en inglés y en español.
 const CALLOUTS: [(&str, &str, &str); 5] = [
@@ -277,7 +304,11 @@ fn formats(text: &str) -> Vec<Fmt> {
                 set(r.end.saturating_sub(n)..r.end, &inline_marker);
             }
             Event::Code(_) | Event::InlineMath(_) | Event::DisplayMath(_) => {
-                set(r.clone(), &|x| x.code = true);
+                let inline_math = matches!(ev, Event::InlineMath(_));
+                set(r.clone(), &|x| {
+                    x.code = true;
+                    x.math = inline_math;
+                });
                 let n = slice.len() - slice.trim_start_matches(['`', '$']).len();
                 set(r.start..r.start + n, &inline_marker);
                 set(r.end.saturating_sub(n)..r.end, &inline_marker);
@@ -676,6 +707,20 @@ pub(crate) fn layout_job_spell(
     spell: Option<&Speller>,
     typing: Option<usize>,
 ) -> (LayoutJob, Vec<Deco>) {
+    layout_job_full(text, s, wrap_width, reveal, spell, typing, &[])
+}
+
+/// Como [`layout_job_spell`], con las fórmulas en línea ya dibujadas (`math`): fuera de la línea
+/// del cursor, cada una deja un hueco de su tamaño (encima se pinta la imagen).
+pub(crate) fn layout_job_full(
+    text: &str,
+    s: &EditorStyle,
+    wrap_width: f32,
+    reveal: Option<std::ops::Range<usize>>,
+    spell: Option<&Speller>,
+    typing: Option<usize>,
+    math: &[MathImg],
+) -> (LayoutJob, Vec<Deco>) {
     let mut f = formats(text);
     if let Some(sp) = spell {
         for r in sp.misspelled(text, |i| spell_skip(&f, i)) {
@@ -697,6 +742,41 @@ pub(crate) fn layout_job_spell(
             && (matches!(x.deco, DECO_BULLET | DECO_TASK | DECO_TASK_DONE | DECO_QUOTE | DECO_TASK_DASH)
                 || ((x.deco == DECO_RULE || x.deco >= DECO_CALLOUT) && !on_line));
     }
+    // Fórmulas en línea dibujadas, fuera de la línea del cursor: el primer `$` hace de hueco y el
+    // resto se oculta.
+    let mut holes: Vec<(usize, usize, u16)> = Vec::new();
+    if !math.is_empty() {
+        let mut i = 0usize;
+        while i < f.len() {
+            if !f.get(i).is_some_and(|x| x.math) {
+                i += 1;
+                continue;
+            }
+            let mut e = i;
+            while f.get(e).is_some_and(|x| x.math) {
+                e += 1;
+            }
+            let on_line = reveal.as_ref().is_some_and(|r| r.contains(&i) || r.end == i);
+            let latex = text.get(i + 1..e.saturating_sub(1)).map(str::trim).unwrap_or("");
+            if !on_line
+                && let Some(k) = math.iter().position(|m| m.latex == latex)
+                && let Ok(slot) = u16::try_from(k + 1)
+                && text.is_char_boundary(i + 1)
+            {
+                for x in f.get_mut(i..e).into_iter().flatten() {
+                    x.hidden = true;
+                    x.concealed = false;
+                }
+                // epaint pone el espacio extra antes de la letra: el hueco queda a su izquierda.
+                if let Some(x) = f.get_mut(i) {
+                    x.hidden = false;
+                    x.math_slot = slot;
+                }
+                holes.push((i, i + 1, slot));
+            }
+            i = e;
+        }
+    }
     // Las marcas que se dibujan, en tramos.
     let mut decos: Vec<Deco> = Vec::new();
     for (i, ch) in text.char_indices() {
@@ -716,6 +796,22 @@ pub(crate) fn layout_job_spell(
             }
         }
     }
+    for (at, end, slot) in holes {
+        decos.push(Deco { kind: DECO_MATH, start: at, end, level: u8::try_from(slot).unwrap_or(0) });
+    }
+    let fmt_of = |fmt: Fmt| -> TextFormat {
+        match math.get(usize::from(fmt.math_slot).wrapping_sub(1)).filter(|_| fmt.math_slot > 0) {
+            Some(m) => TextFormat {
+                font_id: FontId::new(0.05, s.body_family.clone()),
+                color: Color32::TRANSPARENT,
+                extra_letter_spacing: m.size.x + 2.0,
+                line_height: Some((m.size.y + 4.0).max(s.size * LINE_SPACING).round()),
+                valign: egui::Align::Center,
+                ..Default::default()
+            },
+            None => text_format(fmt, s),
+        }
+    };
     let mut job = LayoutJob::default();
     // La sangría de una lista anidada: cada nivel (dos espacios) se ve como 1,2 em.
     let lead = |run: &str, fmt: Fmt| -> f32 {
@@ -727,14 +823,14 @@ pub(crate) fn layout_job_spell(
         let here = f.get(i).copied().unwrap_or_default();
         if here != cur {
             let run = text.get(start..i).unwrap_or("");
-            job.append(run, lead(run, cur), text_format(cur, s));
+            job.append(run, lead(run, cur), fmt_of(cur));
             start = i;
             cur = here;
         }
     }
     if start < text.len() || text.is_empty() {
         let run = text.get(start..).unwrap_or("");
-        job.append(run, lead(run, cur), text_format(cur, s));
+        job.append(run, lead(run, cur), fmt_of(cur));
     }
     job.wrap.max_width = wrap_width;
     (job, decos)
@@ -844,7 +940,7 @@ fn editor_key(ui: &Ui, text: &str, sel: (usize, usize)) -> Option<Edit> {
 /// El editor. `id` identifica su estado (cursor, deshacer) entre cuadros.
 pub fn show(ui: &mut Ui, id: Id, text: &mut String, hint: &str) -> Output {
     let style = EditorStyle::from_ui(ui);
-    let (changed, out) = field(ui, id, text, hint, 16, &style, style_key(&style), None, None, false);
+    let (changed, out) = field(ui, id, text, hint, 16, &style, style_key(&style), None, None, false, &[]);
     Output { changed, response: out.response.response, link: take_link(ui) }
 }
 
@@ -868,6 +964,7 @@ pub(crate) fn field(
     spell: Option<&Speller>,
     notes: Option<&dyn NoteIndex>,
     menus: bool,
+    math: &[MathImg],
 ) -> (bool, egui::text_edit::TextEditOutput) {
     let mut changed = false;
     // Los menús de `/` y `[[`: sus teclas antes que las del campo.
@@ -934,13 +1031,18 @@ pub(crate) fn field(
         spell_gen.hash(&mut h);
         typing.hash(&mut h);
         highlight::ready().hash(&mut h);
+        for m in math {
+            m.latex.hash(&mut h);
+            m.size.x.to_bits().hash(&mut h);
+            m.size.y.to_bits().hash(&mut h);
+        }
         let key = h.finish();
         if let Some((k, g)) = ui.data(|d| d.get_temp::<(u64, Arc<egui::Galley>)>(cache_id))
             && k == key
         {
             return g;
         }
-        let (job, decos) = layout_job_spell(buf.as_str(), style, wrap, reveal.clone(), spell, typing);
+        let (job, decos) = layout_job_full(buf.as_str(), style, wrap, reveal.clone(), spell, typing, math);
         let g = ui.fonts_mut(|f| f.layout_job(job));
         ui.data_mut(|d| {
             d.insert_temp(cache_id, (key, Arc::clone(&g)));
@@ -971,6 +1073,21 @@ pub(crate) fn field(
     let decos = ui.data(|d| d.get_temp::<Arc<Vec<Deco>>>(deco_id)).unwrap_or_default();
     let focused_now = ui.memory(|m| m.has_focus(id));
     paint_decos(ui, &out, text, &decos, style, code_bg, focused_now);
+    // Las fórmulas en línea, en sus huecos.
+    for d in decos.iter().filter(|d| d.kind == DECO_MATH) {
+        if let Some(m) = math.get(usize::from(d.level).wrapping_sub(1)) {
+            // El hueco (el espacio extra de la letra) está justo a la izquierda de ella.
+            let r = span_rect(&out, text, d.start, d.end);
+            let rect =
+                egui::Rect::from_min_size(egui::pos2(r.left() - m.size.x - 1.0, r.center().y - m.size.y / 2.0), m.size);
+            ui.painter().image(
+                m.tex,
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+    }
     // Clic en una casilla: se marca o desmarca (`[ ]` ↔ `[x]`, mismo largo: el cursor no se mueve).
     if out.response.clicked()
         && let Some(pp) = ui.input(|i| i.pointer.interact_pos())
@@ -1349,6 +1466,22 @@ mod tests {
     }
 
     /// WYSIWYG: viñetas, casillas, citas, cercas y reglas son marcas dibujadas; el texto no cambia.
+    #[test]
+    fn inline_formulas_leave_a_hole_off_the_cursor_line() {
+        let s = test_style();
+        let t = "Área $x^2$ total";
+        assert_eq!(inline_maths(t), ["x^2"]);
+        let m = [MathImg { latex: "x^2".into(), tex: egui::TextureId::Managed(0), size: egui::vec2(30.0, 18.0) }];
+        let (job, decos) = layout_job_full(t, &s, 400.0, None, None, None, &m);
+        assert_eq!(decos.iter().filter(|d| d.kind == DECO_MATH).count(), 1);
+        let hole = job.sections.iter().find(|x| x.format.extra_letter_spacing > 1.0).map(|x| x.byte_range.clone());
+        assert_eq!(hole.map(|r| (r.start.0, r.end.0)), Some((t.find('$').unwrap(), t.find('$').unwrap() + 1)));
+        // En la línea del cursor se ve el LaTeX.
+        let (job, decos) = layout_job_full(t, &s, 400.0, Some(0..t.len()), None, None, &m);
+        assert!(decos.iter().all(|d| d.kind != DECO_MATH));
+        assert!(job.sections.iter().all(|x| x.format.extra_letter_spacing < 1.0));
+    }
+
     #[test]
     fn colors_and_highlights_paint_the_text_and_hide_their_tags() {
         let t = "a <span style=\"color: #FF0000\">rojo</span> y <mark style=\"background-color: #FFF2CC\">amarillo</mark> <mark>x</mark>";

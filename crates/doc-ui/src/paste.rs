@@ -10,6 +10,12 @@
 pub trait PasteSource: Send + Sync {
     /// El HTML que hay ahora en el portapapeles, si lo hay.
     fn html(&self) -> Option<String>;
+    /// El texto plano que acompaña a ese HTML, si se puede leer. Sirve para descartar un HTML
+    /// viejo: en GNOME (Wayland) el portapapeles de `arboard` puede ser el de X11, con lo que se
+    /// copió antes en otra app, y no lo que egui acaba de pegar.
+    fn text(&self) -> Option<String> {
+        None
+    }
     /// La imagen que hay ahora en el portapapeles, si la hay.
     fn image(&self) -> Option<crate::PastedImage> {
         None
@@ -25,10 +31,19 @@ impl PasteSource for SystemClipboard {
         (!html.trim().is_empty()).then_some(html)
     }
 
+    fn text(&self) -> Option<String> {
+        arboard::Clipboard::new().ok()?.get_text().ok()
+    }
+
     fn image(&self) -> Option<crate::PastedImage> {
         let img = arboard::Clipboard::new().ok()?.get_image().ok()?;
         Some(crate::PastedImage { width: img.width, height: img.height, rgba: img.bytes.into_owned() })
     }
+}
+
+/// ¿Es el mismo texto (sin contar espacios ni saltos de línea, que cambian entre sistemas)?
+fn same_text(a: &str, b: &str) -> bool {
+    a.split_whitespace().take(100_000).eq(b.split_whitespace().take(100_000))
 }
 
 /// ¿El bloque es un bloque de código (ahí se pega texto plano)?
@@ -58,6 +73,18 @@ fn is_blockish(md: &str) -> bool {
 /// pegados a media línea van en bloques propios (un título no se pega al final de un párrafo).
 pub(crate) fn rewrite(ui: &egui::Ui, source: &dyn PasteSource, line_start: bool, line_end: bool) {
     if !ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))) {
+        return;
+    }
+    let pasted = ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Paste(t) => Some(t.clone()),
+            _ => None,
+        })
+    });
+    // Un HTML de otra copia (más vieja) no sustituye lo que se pega.
+    if let (Some(p), Some(t)) = (pasted.as_deref(), source.text())
+        && !same_text(p, &t)
+    {
         return;
     }
     let Some(html) = source.html() else { return };

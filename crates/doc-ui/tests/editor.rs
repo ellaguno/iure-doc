@@ -435,6 +435,35 @@ fn pasting_html_pastes_its_markdown() {
     assert_eq!(h.state().text, "Antes\n\n## Acuerdos\n\n- **uno**\n- dos\n", "los bloques, en bloques propios");
 }
 
+struct StalePaste;
+
+impl iure_doc_ui::PasteSource for StalePaste {
+    fn html(&self) -> Option<String> {
+        Some("<h1>Copia vieja</h1>".into())
+    }
+    fn text(&self) -> Option<String> {
+        Some("Copia vieja".into())
+    }
+}
+
+/// Regresión: en GNOME el HTML del portapapeles podía ser de otra copia (el de X11) y se pegaba
+/// eso en vez de lo cortado en el editor.
+#[test]
+fn a_stale_clipboard_html_does_not_replace_the_pasted_text() {
+    let hooks = iure_doc_ui::Hooks { paste: Some(std::sync::Arc::new(StalePaste)), ..Default::default() };
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("pg"), &mut st.text, "Escribe", hooks.clone());
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        State { text: "ab\n".to_string() },
+    );
+    block_cursor_at(&mut h, 1);
+    h.event(egui::Event::Paste("cortado".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().text, "acortadob\n");
+}
+
 #[test]
 fn inline_html_is_pasted_inline() {
     let mut h = paste_harness("ab\n", "<span>hola <b>mundo</b></span>");

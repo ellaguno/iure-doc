@@ -54,7 +54,7 @@ mod suggest;
 mod table_ui;
 mod templates;
 pub use blocks::{
-    ExternalEdit, Hooks, apply_external, caret_offset, focus_offset, show as show_blocks,
+    ExternalEdit, Hooks, apply_external, caret_offset, focus_offset, selection, show as show_blocks,
     show_hooks as show_blocks_hooks, show_with as show_blocks_with,
 };
 pub use diagrams::{DiagramImage, DiagramRenderer};

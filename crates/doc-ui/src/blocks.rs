@@ -1637,6 +1637,8 @@ pub enum ExternalEdit {
     Link,
     /// Color del texto o resaltado de la selección (`#RRGGBB`; `None` lo quita).
     Paint(edit::Paint, Option<String>),
+    /// Cambia la selección por este texto (sin selección, lo escribe en el cursor).
+    Replace(String),
 }
 
 /// Aplica `edit` en el cursor (o la selección) del editor `id` —el último que tuvo; sin cursor, al
@@ -1667,6 +1669,24 @@ pub fn caret_offset(ctx: &egui::Context, id: Id, text: &str) -> Option<usize> {
         return None;
     }
     st.caret.map(|(uid, pos)| st.blocks.offset_of(uid).saturating_add(pos))
+}
+
+/// La selección del editor `id` (caracteres del documento, de menor a mayor), si hay una dentro de
+/// un bloque o entre bloques.
+pub fn selection(ctx: &egui::Context, id: Id, text: &str) -> Option<(usize, usize)> {
+    let st = ctx.data(|d| d.get_temp::<State>(id))?;
+    if st.hash != hash_str(text) {
+        return None;
+    }
+    if let Some((a, b)) = st.span {
+        return (a != b).then_some((a.min(b), a.max(b)));
+    }
+    let caret = st.caret.map(|(uid, pos)| st.blocks.offset_of(uid).saturating_add(pos))?;
+    let anchor = st
+        .anchor
+        .filter(|a| st.caret.is_some_and(|c| c.0 == a.0))
+        .map(|(uid, pos)| st.blocks.offset_of(uid).saturating_add(pos))?;
+    (anchor != caret).then_some((anchor.min(caret), anchor.max(caret)))
 }
 
 pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: ExternalEdit) -> bool {
@@ -1704,6 +1724,16 @@ pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: Exte
     let at = byte(caret, text);
     let undo = matches!(edit, ExternalEdit::Undo | ExternalEdit::Redo);
     let new_caret = match edit {
+        ExternalEdit::Replace(with) => {
+            let with: String = with.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
+            let (lb, hb) = (byte(lo, text), byte(hi, text));
+            if lb == hb && with.is_empty() {
+                None
+            } else {
+                text.replace_range(lb..hb, &with);
+                Some(lo + with.chars().count())
+            }
+        }
         ExternalEdit::Insert(ins) => {
             let ins: String = ins.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
             if ins.is_empty() {
@@ -1860,6 +1890,24 @@ mod tests {
         assert!(!apply_external(&ctx, id, &mut text, ExternalEdit::Undo));
         assert!(apply_external(&ctx, id, &mut text, ExternalEdit::DeleteWord));
         assert_eq!(text, "");
+    }
+
+    /// La selección se lee y se reemplaza desde fuera (el asistente de la app).
+    #[test]
+    fn the_selection_is_read_and_replaced() {
+        let ctx = egui::Context::default();
+        let id = Id::unique("seleccion");
+        let mut text = "Hola mundo cruel\n".to_string();
+        assert_eq!(selection(&ctx, id, &text), None);
+        let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
+        st.blocks = Blocks::new(&text);
+        st.hash = hash_str(&text);
+        st.caret = Some(st.blocks.at_offset(10));
+        st.anchor = Some(st.blocks.at_offset(5));
+        ctx.data_mut(|d| d.insert_temp(id, st));
+        assert_eq!(selection(&ctx, id, &text), Some((5, 10)));
+        assert!(apply_external(&ctx, id, &mut text, ExternalEdit::Replace("mundo amable".into())));
+        assert_eq!(text, "Hola mundo amable cruel\n");
     }
 
     /// La barra de formato de una app: negrita sobre la selección, título, cita, enlace, rehacer.

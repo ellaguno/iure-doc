@@ -933,3 +933,40 @@ fn slash_menu_items_can_be_clicked() {
     h.run_steps(3);
     assert!(h.state().text.starts_with("> [!MINDMAP]"), "{:?}", h.state().text);
 }
+
+/// La barra de formato compartida: cada botón dice qué hace y devuelve su cambio; el subrayado lo
+/// resuelve la app.
+#[test]
+fn the_shared_format_bar_reports_what_was_pressed() {
+    use iure_doc_ui::toolbar::{self, Pressed, Tool};
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 60.0)).build_ui_state(
+        |ui, got: &mut Vec<Pressed>| {
+            ui.horizontal(|ui| {
+                if let Some(p) = toolbar::tools(ui, toolbar::FULL) {
+                    got.push(p);
+                }
+                if let Some(p) = toolbar::tools(ui, &[Tool::Underline]) {
+                    got.push(p);
+                }
+            });
+        },
+        Vec::new(),
+    );
+    h.run();
+    for label in ["Negrita (Ctrl+B)", "Cita", "Lista con viñetas", "Lista numerada", "Enlace", "Subrayado"] {
+        h.get_by_label(label).click();
+        h.run();
+    }
+    assert_eq!(
+        h.state(),
+        &vec![
+            Pressed::Edit(iure_doc_ui::ExternalEdit::Wrap("**".into())),
+            Pressed::Edit(iure_doc_ui::ExternalEdit::Quote),
+            Pressed::Edit(iure_doc_ui::ExternalEdit::Line(iure_doc::edit::LineKind::Bullet)),
+            Pressed::Edit(iure_doc_ui::ExternalEdit::Line(iure_doc::edit::LineKind::Ordered)),
+            Pressed::Edit(iure_doc_ui::ExternalEdit::Link),
+            Pressed::Other(Tool::Underline),
+        ]
+    );
+}

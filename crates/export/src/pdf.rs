@@ -285,8 +285,45 @@ impl Writer<'_> {
 
     /// Contenido en línea como una secuencia de expresiones (`"a"; strong("b"); …`).
     fn inlines(&mut self, c: &[Inline], base: Style) -> String {
-        let parts: Vec<String> = c.iter().filter_map(|i| self.inline(i, base)).collect();
-        if parts.is_empty() { "[]".to_string() } else { parts.join("; ") }
+        use crate::text::{PaintTag, paint_tag};
+        let join = |parts: Vec<String>| if parts.is_empty() { "[]".to_string() } else { parts.join("; ") };
+        // Color y resaltado: lo de dentro, envuelto en `text(fill:)` o `highlight(fill:)`.
+        let mut stack: Vec<(Option<(bool, String)>, Vec<String>)> = vec![(None, Vec::new())];
+        for i in c {
+            if let Inline::Html(h) = i {
+                match paint_tag(h) {
+                    Some(PaintTag::Open { highlight, hex }) if stack.len() < 32 => {
+                        stack.push((Some((highlight, hex)), Vec::new()));
+                        continue;
+                    }
+                    Some(PaintTag::Close { highlight })
+                        if stack.last().is_some_and(|(p, _)| p.as_ref().is_some_and(|p| p.0 == highlight)) =>
+                    {
+                        if let Some((Some((hl, hex)), parts)) = stack.pop() {
+                            let f = if hl { "highlight" } else { "text" };
+                            let w = format!("{f}(fill: rgb(\"#{hex}\"), {{ {} }})", join(parts));
+                            if let Some(top) = stack.last_mut() {
+                                top.1.push(w);
+                            }
+                        }
+                        continue;
+                    }
+                    Some(_) => continue,
+                    None => {}
+                }
+            }
+            if let Some(s) = self.inline(i, base)
+                && let Some(top) = stack.last_mut()
+            {
+                top.1.push(s);
+            }
+        }
+        // Lo que quedó abierto, sin color.
+        let mut parts = Vec::new();
+        for (_, p) in stack {
+            parts.extend(p);
+        }
+        join(parts)
     }
 
     fn inline(&mut self, i: &Inline, base: Style) -> Option<String> {

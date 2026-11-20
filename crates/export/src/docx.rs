@@ -297,9 +297,32 @@ impl Writer<'_> {
     // ----- en línea -----
 
     fn inlines(&mut self, c: &[Inline], base: Style) -> String {
+        use crate::text::{PaintTag, paint_tag};
         let mut out = String::new();
+        // Color y resaltado abiertos (el último manda).
+        let mut paints: Vec<(bool, String)> = Vec::new();
         for i in c {
-            out.push_str(&self.inline(i, base));
+            if let Inline::Html(h) = i {
+                match paint_tag(h) {
+                    Some(PaintTag::Open { highlight, hex }) => {
+                        if paints.len() < 32 {
+                            paints.push((highlight, hex));
+                        }
+                        continue;
+                    }
+                    Some(PaintTag::Close { highlight }) => {
+                        if let Some(k) = paints.iter().rposition(|p| p.0 == highlight) {
+                            paints.remove(k);
+                        }
+                        continue;
+                    }
+                    None => {}
+                }
+            }
+            let xml = self.inline(i, base);
+            let fg = paints.iter().rev().find(|p| !p.0).map(|p| p.1.as_str());
+            let bg = paints.iter().rev().find(|p| p.0).map(|p| p.1.as_str());
+            out.push_str(&tint_runs(&xml, fg, bg));
         }
         out
     }
@@ -529,6 +552,23 @@ fn run_xml(text: &str, style: Style, rstyle: Option<&str>) -> String {
     }
     let rpr = if rpr.is_empty() { String::new() } else { format!("<w:rPr>{rpr}</w:rPr>") };
     format!("<w:r>{rpr}{}</w:r>", text_xml(text))
+}
+
+/// Pone color de texto y sombreado (resaltado) a los tramos (`<w:r>`) de `xml`, al final de sus
+/// propiedades (ahí van en el orden del esquema).
+fn tint_runs(xml: &str, fg: Option<&str>, bg: Option<&str>) -> String {
+    if fg.is_none() && bg.is_none() {
+        return xml.to_string();
+    }
+    let mut props = String::new();
+    if let Some(c) = fg {
+        props.push_str(&format!("<w:color w:val=\"{c}\"/>"));
+    }
+    if let Some(c) = bg {
+        props.push_str(&format!("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{c}\"/>"));
+    }
+    xml.replace("</w:rPr>", &format!("{props}</w:rPr>"))
+        .replace("<w:r><w:t", &format!("<w:r><w:rPr>{props}</w:rPr><w:t"))
 }
 
 /// WebP (u otro formato que Word no abre) a PNG, acotado.

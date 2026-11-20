@@ -139,6 +139,22 @@ struct Fmt {
     concealed: bool,
     /// Sangría de un elemento de lista anidado: se ve más ancha que sus espacios.
     indent: bool,
+    /// Color del texto (`<span style="color: …">`): `0x01RRGGBB`, 0 sin color.
+    fg: u32,
+    /// Resaltado (`<mark>`): `0x01RRGGBB`, 0 sin resaltado.
+    bg: u32,
+}
+
+/// `#RRGGBB` de una etiqueta (`… color: #RRGGBB …`) como `0x01RRGGBB`.
+fn tag_color(tag: &str, key: &str) -> Option<u32> {
+    let at = tag.find(key)? + key.len();
+    let rest = tag.get(at..)?.trim_start_matches([':', ' ']);
+    let hex = iure_doc::edit::hex_color(rest.get(..7)?)?;
+    u32::from_str_radix(hex.get(1..)?, 16).ok().map(|v| v | 0x0100_0000)
+}
+
+fn rgb_of(v: u32) -> Color32 {
+    Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
 }
 
 /// Marcas de bloque dibujadas (WYSIWYG). El texto sigue ahí (el cursor, deshacer y el Markdown no
@@ -212,6 +228,8 @@ fn formats(text: &str) -> Vec<Fmt> {
         | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
     // Lenguaje del bloque de código en el que se está (para el resaltado de sintaxis).
     let mut code_lang: Option<String> = None;
+    // Colores y resaltados abiertos: (resaltado, color, dónde empieza el texto).
+    let mut paints: Vec<(bool, u32, usize)> = Vec::new();
     for (ev, r) in Parser::new_ext(text, opts).into_offset_iter() {
         let slice = text.get(r.clone()).unwrap_or("");
         match ev {
@@ -401,7 +419,40 @@ fn formats(text: &str) -> Vec<Fmt> {
                 x.marker = true;
                 x.deco = DECO_RULE;
             }),
-            Event::Html(_) | Event::InlineHtml(_) => set(r, &|x| x.marker = true),
+            Event::InlineHtml(h) => {
+                let tag = h.trim().to_ascii_lowercase();
+                let paint = if tag.starts_with("<span") {
+                    tag_color(&tag, "color").map(|c| (false, c))
+                } else if tag.starts_with("<mark") {
+                    Some((true, tag_color(&tag, "background-color").unwrap_or(0x01FF_F59D)))
+                } else {
+                    None
+                };
+                let closing = match tag.as_str() {
+                    "</span>" => Some(false),
+                    "</mark>" => Some(true),
+                    _ => None,
+                };
+                if let Some((hl, c)) = paint {
+                    set(r.clone(), &inline_marker);
+                    if paints.len() < 64 {
+                        paints.push((hl, c, r.end));
+                    }
+                } else if let Some(hl) = closing
+                    && let Some(k) = paints.iter().rposition(|p| p.0 == hl)
+                {
+                    set(r.clone(), &inline_marker);
+                    let (_, c, start) = paints.remove(k);
+                    if hl {
+                        set(start..r.start, &|x| x.bg = c);
+                    } else {
+                        set(start..r.start, &|x| x.fg = c);
+                    }
+                } else {
+                    set(r, &|x| x.marker = true);
+                }
+            }
+            Event::Html(_) => set(r, &|x| x.marker = true),
             Event::Start(Tag::MetadataBlock(_)) => set(r, &|x| x.marker = true),
             _ => {}
         }
@@ -567,13 +618,26 @@ fn text_format(fmt: Fmt, s: &EditorStyle) -> TextFormat {
     if fmt.done && !fmt.marker {
         color = s.muted;
     }
+    if fmt.fg != 0 && !fmt.marker {
+        color = rgb_of(fmt.fg);
+    }
+    // Sobre un resaltado claro, en el tema oscuro, el texto va oscuro para leerse.
+    if fmt.bg != 0 && !fmt.marker && s.dark && fmt.fg == 0 {
+        color = Color32::from_rgb(0x1f, 0x1f, 0x1f);
+    }
     TextFormat {
         font_id: FontId::new(size, family),
         line_height: line_height(fmt, size),
         color,
         italics: fmt.italic || (fmt.quote && !fmt.marker) || (fmt.code && fmt.syn == highlight::COMMENT),
         // El código en bloque va en una caja (la dibuja el campo), no tramo a tramo.
-        background: if fmt.code && !fmt.marker && !fmt.block_code { s.code_bg } else { Color32::TRANSPARENT },
+        background: if fmt.bg != 0 && !fmt.marker {
+            rgb_of(fmt.bg)
+        } else if fmt.code && !fmt.marker && !fmt.block_code {
+            s.code_bg
+        } else {
+            Color32::TRANSPARENT
+        },
         strikethrough: if (fmt.strike || fmt.done) && !fmt.marker {
             Stroke::new(1.0, if fmt.done { s.muted } else { s.text })
         } else {
@@ -1285,6 +1349,18 @@ mod tests {
     }
 
     /// WYSIWYG: viñetas, casillas, citas, cercas y reglas son marcas dibujadas; el texto no cambia.
+    #[test]
+    fn colors_and_highlights_paint_the_text_and_hide_their_tags() {
+        let t = "a <span style=\"color: #FF0000\">rojo</span> y <mark style=\"background-color: #FFF2CC\">amarillo</mark> <mark>x</mark>";
+        let f = formats(t);
+        let at = |n: &str| f.get(t.find(n).unwrap()).copied().unwrap();
+        assert_eq!(at("rojo").fg, 0x01FF_0000);
+        assert_eq!(at("amarillo").bg, 0x01FF_F2CC);
+        assert_eq!(at("x</mark>").bg, 0x01FF_F59D, "sin color: amarillo");
+        assert!(at("<span").inline && at("</mark>").inline, "las etiquetas se ocultan fuera de su línea");
+        assert_eq!(at(" y ").fg, 0);
+    }
+
     #[test]
     fn callouts_show_their_title_off_their_line() {
         let s = test_style();

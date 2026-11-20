@@ -284,7 +284,18 @@ impl Writer<'_> {
             Inline::Break => self.out.push_str("<br>\n"),
             Inline::SoftBreak => self.out.push('\n'),
             // HTML del documento: como texto (no se ejecuta ni se interpreta).
-            Inline::Html(h) => self.out.push_str(&escape(h)),
+            Inline::Html(h) => match crate::text::paint_tag(h) {
+                // Color y resaltado: la etiqueta se rehace (nada del documento pasa como HTML).
+                Some(crate::text::PaintTag::Open { highlight: false, hex }) => {
+                    self.out.push_str(&format!("<span style=\"color: #{hex}\">"));
+                }
+                Some(crate::text::PaintTag::Open { highlight: true, hex }) => {
+                    self.out.push_str(&format!("<mark style=\"background-color: #{hex}\">"));
+                }
+                Some(crate::text::PaintTag::Close { highlight: false }) => self.out.push_str("</span>"),
+                Some(crate::text::PaintTag::Close { highlight: true }) => self.out.push_str("</mark>"),
+                None => self.out.push_str(&escape(h)),
+            },
         }
     }
 }

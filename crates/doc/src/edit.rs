@@ -347,6 +347,71 @@ pub fn toggle_wrap(text: &str, sel_start: usize, sel_end: usize, mark: &str) -> 
     Edit { text: out, sel_start: a + m, sel_end: b + m }
 }
 
+/// Color del texto o resaltado (como IureEditor 1.x, HTML dentro del Markdown).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Paint {
+    /// `<span style="color: #RRGGBB">…</span>`
+    Color,
+    /// `<mark style="background-color: #RRGGBB">…</mark>`
+    Highlight,
+}
+
+/// `#RRGGBB` válido (en mayúsculas), o `None`.
+pub fn hex_color(c: &str) -> Option<String> {
+    let h = c.trim().strip_prefix('#')?;
+    (h.len() == 6 && h.chars().all(|x| x.is_ascii_hexdigit())).then(|| format!("#{}", h.to_ascii_uppercase()))
+}
+
+/// Las etiquetas de apertura y cierre de una pintura.
+pub fn paint_tags(kind: Paint, color: &str) -> (String, &'static str) {
+    match kind {
+        Paint::Color => (format!("<span style=\"color: {color}\">"), "</span>"),
+        Paint::Highlight => (format!("<mark style=\"background-color: {color}\">"), "</mark>"),
+    }
+}
+
+/// La etiqueta de apertura de esa pintura con la que termina `before`, si la hay (su largo en bytes).
+fn open_tag_at_end(before: &str, kind: Paint) -> Option<usize> {
+    let start = before.rfind('<')?;
+    let tag = before.get(start..)?;
+    let ok = match kind {
+        Paint::Color => tag.starts_with("<span") && tag.contains("color"),
+        Paint::Highlight => tag.starts_with("<mark"),
+    };
+    (ok && tag.ends_with('>') && !tag.contains('\n')).then_some(tag.len())
+}
+
+/// Pone el color (o el resaltado) a la selección; con `None` lo quita. Si la selección ya tiene esa
+/// pintura justo alrededor, se cambia (o se quita) en vez de anidar otra.
+pub fn paint(text: &str, sel_start: usize, sel_end: usize, kind: Paint, color: Option<&str>) -> Edit {
+    let (a, b) = (sel_start.min(sel_end), sel_start.max(sel_end));
+    let (ab, bb) = (byte_of(text, a), byte_of(text, b));
+    let before = text.get(..ab).unwrap_or("");
+    let after = text.get(bb..).unwrap_or("");
+    let inside = text.get(ab..bb).unwrap_or("");
+    let color = color.and_then(hex_color);
+    let close = paint_tags(kind, "").1;
+    let (before, after, shift) = match open_tag_at_end(before, kind) {
+        Some(n) if after.starts_with(close) => {
+            let open = before.get(before.len() - n..).unwrap_or("");
+            (before.get(..before.len() - n).unwrap_or(""), after.get(close.len()..).unwrap_or(""), open.chars().count())
+        }
+        _ => (before, after, 0),
+    };
+    match color {
+        Some(c) if !inside.is_empty() => {
+            let (open, close) = paint_tags(kind, &c);
+            let n = open.chars().count();
+            Edit {
+                text: format!("{before}{open}{inside}{close}{after}"),
+                sel_start: a - shift + n,
+                sel_end: b - shift + n,
+            }
+        }
+        _ => Edit { text: format!("{before}{inside}{after}"), sel_start: a - shift, sel_end: b - shift },
+    }
+}
+
 /// Ctrl+K: `[selección](url)` con «url» seleccionada para escribir la dirección.
 pub fn link(text: &str, sel_start: usize, sel_end: usize) -> Edit {
     let (a, b) = (sel_start.min(sel_end), sel_start.max(sel_end));
@@ -360,6 +425,26 @@ pub fn link(text: &str, sel_start: usize, sel_end: usize) -> Edit {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn paint_wraps_changes_and_removes() {
+        use super::{Paint, paint};
+        let t = "uno dos tres";
+        let e = paint(t, 4, 7, Paint::Color, Some("#ff0000"));
+        assert_eq!(e.text, "uno <span style=\"color: #FF0000\">dos</span> tres");
+        let (a, b) = (e.sel_start, e.sel_end);
+        assert_eq!(e.text.chars().skip(a).take(b - a).collect::<String>(), "dos");
+        // Otro color: se cambia, no se anida.
+        let e2 = paint(&e.text, a, b, Paint::Color, Some("#0000FF"));
+        assert_eq!(e2.text, "uno <span style=\"color: #0000FF\">dos</span> tres");
+        // Sin color: se quita.
+        let e3 = paint(&e2.text, e2.sel_start, e2.sel_end, Paint::Color, None);
+        assert_eq!((e3.text.as_str(), e3.sel_start, e3.sel_end), (t, 4, 7));
+        let h = paint(t, 0, 3, Paint::Highlight, Some("#FFF2CC"));
+        assert_eq!(h.text, "<mark style=\"background-color: #FFF2CC\">uno</mark> dos tres");
+        // Un color que no es `#RRGGBB` no entra.
+        assert_eq!(paint(t, 0, 3, Paint::Color, Some("red\" onload=\"x")).text, t);
+    }
 
     #[test]
     fn three_enters_leave_a_code_block() {

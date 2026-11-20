@@ -105,3 +105,39 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
     }
     out
 }
+
+/// Etiqueta de color o resaltado (`<span style="color: #…">`, `<mark …>`, sus cierres), como las
+/// escribe el editor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PaintTag {
+    /// `hex` sin `#`, en mayúsculas.
+    Open {
+        highlight: bool,
+        hex: String,
+    },
+    Close {
+        highlight: bool,
+    },
+}
+
+/// Lee una etiqueta de color o resaltado.
+pub(crate) fn paint_tag(h: &str) -> Option<PaintTag> {
+    let t = h.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "</span>" => return Some(PaintTag::Close { highlight: false }),
+        "</mark>" => return Some(PaintTag::Close { highlight: true }),
+        _ => {}
+    }
+    let color = |key: &str| {
+        let at = t.find(key)? + key.len();
+        let rest = t.get(at..)?.trim_start_matches([':', ' ']);
+        iure_doc::edit::hex_color(rest.get(..7)?).map(|c| c.trim_start_matches('#').to_string())
+    };
+    if t.starts_with("<span") {
+        color("color").map(|hex| PaintTag::Open { highlight: false, hex })
+    } else if t.starts_with("<mark") {
+        Some(PaintTag::Open { highlight: true, hex: color("background-color").unwrap_or_else(|| "FFF59D".into()) })
+    } else {
+        None
+    }
+}

@@ -209,6 +209,23 @@ fn hostile_text_is_valid_xml() {
     assert!(d.contains("&lt;w:p&gt; &amp; &quot;x&quot;"));
 }
 
+/// Color y resaltado del editor: en HTML se rehacen las etiquetas, en Word van como color y
+/// sombreado del tramo, y no se escriben como texto.
+#[test]
+fn colors_and_highlights_are_exported() {
+    let md = "Uno <span style=\"color: #ff0000\">rojo</span> y <mark style=\"background-color: #FFF2CC\">claro</mark>.\n\n<span onclick=\"x\">otro</span>\n";
+    let doc = Document::parse(md);
+    let h = html::html(&doc, &Fake, &Options::default());
+    assert!(h.contains("<span style=\"color: #FF0000\">rojo</span>"), "{h}");
+    assert!(h.contains("<mark style=\"background-color: #FFF2CC\">claro</mark>"));
+    assert!(!h.contains("onclick=\""), "lo demás se escapa");
+    let bytes = docx::docx(&doc, &Fake, &Options::default()).unwrap();
+    let d = String::from_utf8(unzip(&bytes).get("word/document.xml").cloned().unwrap_or_default()).unwrap();
+    assert!(d.contains("<w:color w:val=\"FF0000\"/>") && d.contains("w:fill=\"FFF2CC\""), "{d}");
+    assert!(!d.contains("&lt;span style"), "la etiqueta no sale como texto");
+    assert!(balanced(&d).is_ok());
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
@@ -227,6 +244,17 @@ proptest! {
 #[cfg(feature = "pdf")]
 mod pdf_tests {
     use super::*;
+
+    #[test]
+    fn pdf_carries_colors_and_formulas() {
+        let md = "Uno <span style=\"color: #FF0000\">rojo</span> y <mark>claro</mark>.\n\n$$\n\\frac{a}{b}\n$$\n\nY $x^2$ en línea.\n";
+        let doc = Document::parse(md);
+        let (src, _) = pdf::typst_source(&doc, &Fake, &Options::default(), true);
+        assert!(src.contains("text(fill: rgb(\"#FF0000\")") && src.contains("highlight(fill:"), "{src}");
+        assert!(src.contains("math.equation(block: true"), "{src}");
+        assert!(!src.contains("<span"), "{src}");
+        assert!(pdf::pdf(&doc, &Fake, &Options::default()).unwrap().starts_with(b"%PDF-"));
+    }
 
     #[test]
     fn pdf_is_made_with_everything() {

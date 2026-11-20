@@ -1621,6 +1621,8 @@ pub enum ExternalEdit {
     Quote,
     /// `[selección](url)`.
     Link,
+    /// Color del texto o resaltado de la selección (`#RRGGBB`; `None` lo quita).
+    Paint(edit::Paint, Option<String>),
 }
 
 /// Aplica `edit` en el cursor (o la selección) del editor `id` —el último que tuvo; sin cursor, al
@@ -1664,8 +1666,14 @@ pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: Exte
     }
     let total = text.chars().count();
     // Sin cursor: escribir va al final; dar formato, a la última línea con texto.
-    let formatting =
-        matches!(edit, ExternalEdit::Wrap(_) | ExternalEdit::Line(_) | ExternalEdit::Quote | ExternalEdit::Link);
+    let formatting = matches!(
+        edit,
+        ExternalEdit::Wrap(_)
+            | ExternalEdit::Line(_)
+            | ExternalEdit::Quote
+            | ExternalEdit::Link
+            | ExternalEdit::Paint(..)
+    );
     let fallback = if formatting { text.trim_end_matches(['\n', '\r']).chars().count() } else { total };
     let caret = st.caret.map_or(fallback, |(uid, pos)| st.blocks.offset_of(uid).saturating_add(pos)).min(total);
     let anchor = st
@@ -1724,6 +1732,14 @@ pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: Exte
             *text = e.text;
             e.sel_end
         }),
+        ExternalEdit::Paint(kind, color) => {
+            let e = edit::paint(text, lo, hi, kind, color.as_deref());
+            keep = Some((e.sel_start, e.sel_end));
+            (e.text != *text).then(|| {
+                *text = e.text;
+                e.sel_end
+            })
+        }
         ExternalEdit::Link => {
             let e = edit::link(text, lo, hi);
             keep = Some((e.sel_start, e.sel_end));

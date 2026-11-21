@@ -55,8 +55,8 @@ mod table_ui;
 mod templates;
 pub mod toolbar;
 pub use blocks::{
-    ExternalEdit, Hooks, apply_external, caret_offset, focus_offset, selection, show as show_blocks,
-    show_hooks as show_blocks_hooks, show_with as show_blocks_with,
+    ExternalEdit, Hooks, PAGE_FULL, PAGE_MEDIUM, PAGE_WIDE, apply_external, caret_offset, focus_offset, open_find,
+    select_all, selection, show as show_blocks, show_hooks as show_blocks_hooks, show_with as show_blocks_with,
 };
 pub use diagrams::{DiagramImage, DiagramRenderer, Hotspot, NodeAction, Placement};
 pub use highlight::wait_ready as wait_highlighting;

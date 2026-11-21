@@ -1031,7 +1031,19 @@ pub struct Hooks {
     pub math: Option<Arc<dyn DiagramRenderer>>,
     /// Zoom del documento (1.0 = la letra del tema); se acota a 50 %–300 %.
     pub zoom: Option<f32>,
+    /// Ancho de la página en «em» (`None`: [`crate::COLUMN_EMS`]; infinito: toda la ventana). Ver
+    /// [`PAGE_MEDIUM`], [`PAGE_WIDE`], [`PAGE_FULL`].
+    pub page: Option<f32>,
+    /// Margen a cada lado del texto, dentro del área que se desplaza (la barra queda en la orilla).
+    pub gutter: Option<f32>,
 }
+
+/// Página mediana (como «Medio» de IureEditor 1.x: 48 em).
+pub const PAGE_MEDIUM: f32 = 48.0;
+/// Página ancha (64 em).
+pub const PAGE_WIDE: f32 = 64.0;
+/// Toda la ventana.
+pub const PAGE_FULL: f32 = f32::INFINITY;
 
 /// Como [`show`], con los ganchos de la app.
 pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hooks) -> Output {
@@ -1276,10 +1288,14 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
         |ui, viewport| {
             // El texto en una columna de documento centrada (como un procesador de textos): con
             // ventanas anchas no se va de orilla a orilla.
+            let gutter = hooks.gutter.filter(|g| g.is_finite()).unwrap_or(0.0).clamp(0.0, 200.0);
             let full = ui.available_width();
-            let col = full.min(style.size * crate::COLUMN_EMS).max(full.min(240.0));
+            let pad = gutter.min(full * 0.08);
+            let inner = (full - 2.0 * pad).max(1.0);
+            let ems = hooks.page.filter(|e| *e > 0.0).unwrap_or(crate::COLUMN_EMS);
+            let col = inner.min(style.size * ems).max(inner.min(240.0));
             let mut column = ui.available_rect_before_wrap();
-            column.min.x += ((full - col) / 2.0).floor();
+            column.min.x += pad + ((inner - col) / 2.0).floor();
             column.max.x = column.min.x + col;
             ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -1950,6 +1966,41 @@ pub fn focus_offset(ctx: &egui::Context, id: Id, text: &str, at: usize) {
     st.caret = Some(f);
     st.anchor = Some(f);
     st.focus = Some(f);
+    ctx.data_mut(|d| d.insert_temp(id, st));
+    ctx.request_repaint();
+}
+
+/// Abre la barra de buscar (o buscar y reemplazar) del editor `id`, como Ctrl+F / Ctrl+H: el menú
+/// de una app.
+pub fn open_find(ctx: &egui::Context, id: Id, text: &str, replace: bool) {
+    let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
+    let h = hash_str(text);
+    if st.hash != h || st.blocks.chunks.is_empty() {
+        st.blocks = Blocks::new(text);
+        st.hash = h;
+        st.history.clear();
+    }
+    st.find.anchor = st.caret.map(|(u, p)| st.blocks.offset_of(u).saturating_add(p));
+    st.find.key = 0;
+    st.find.open = true;
+    st.find.replace = replace;
+    st.find.focus_query = true;
+    st.find.scroll = true;
+    ctx.data_mut(|d| d.insert_temp(id, st));
+    ctx.request_repaint();
+}
+
+/// Selecciona todo el documento del editor `id` (como Ctrl+A).
+pub fn select_all(ctx: &egui::Context, id: Id, text: &str) {
+    let mut st = ctx.data_mut(|d| d.remove_temp::<State>(id)).unwrap_or_default();
+    let h = hash_str(text);
+    if st.hash != h || st.blocks.chunks.is_empty() {
+        st.blocks = Blocks::new(text);
+        st.hash = h;
+        st.history.clear();
+    }
+    let n = text.chars().count();
+    st.span = (n > 0).then_some((0, n));
     ctx.data_mut(|d| d.insert_temp(id, st));
     ctx.request_repaint();
 }

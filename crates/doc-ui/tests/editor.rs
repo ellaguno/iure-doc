@@ -970,3 +970,28 @@ fn the_shared_format_bar_reports_what_was_pressed() {
         ]
     );
 }
+
+/// Números de línea junto al texto con formato: cada renglón que empieza una línea del Markdown
+/// lleva la suya (las líneas vacías entre bloques cuentan).
+#[test]
+fn line_numbers_follow_the_markdown_lines() {
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        |ui, text: &mut String| {
+            let hooks = iure_doc_ui::Hooks { line_numbers: true, gutter: Some(40.0), ..Default::default() };
+            iure_doc_ui::show_blocks_hooks(ui, Id::unique("lineas"), text, "", hooks);
+        },
+        "uno\n\ndos\ntres\n".to_string(),
+    );
+    h.run_steps(2);
+    let mut nums: Vec<String> = Vec::new();
+    for c in &h.output().shapes {
+        if let egui::epaint::Shape::Text(t) = &c.shape {
+            let s = t.galley.text().to_string();
+            if s.chars().all(|c| c.is_ascii_digit()) && !s.is_empty() {
+                nums.push(s);
+            }
+        }
+    }
+    nums.sort();
+    assert_eq!(nums, ["1", "3", "4"]);
+}

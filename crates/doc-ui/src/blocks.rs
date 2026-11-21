@@ -1036,6 +1036,8 @@ pub struct Hooks {
     pub page: Option<f32>,
     /// Margen a cada lado del texto, dentro del área que se desplaza (la barra queda en la orilla).
     pub gutter: Option<f32>,
+    /// Números de línea (del Markdown) en el margen izquierdo, junto al texto con formato.
+    pub line_numbers: bool,
 }
 
 /// Página mediana (como «Medio» de IureEditor 1.x: 48 em).
@@ -1845,6 +1847,42 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                 }
                 if space > 0.0 {
                     ui.add_space(space);
+                }
+                // Números de línea: cada renglón que empieza una línea del Markdown lleva la suya, a
+                // la izquierda del texto (con formato, sin pasar al código).
+                if hooks.line_numbers {
+                    let mut first = Vec::with_capacity(st.blocks.chunks.len());
+                    let mut line = 1usize;
+                    for c in &st.blocks.chunks {
+                        first.push(line);
+                        line = line
+                            .saturating_add(c.content.matches('\n').count())
+                            .saturating_add(c.sep.matches('\n').count());
+                    }
+                    let font = egui::FontId::monospace((style.size * 0.72).max(8.0));
+                    let color = style.muted.gamma_multiply(0.8);
+                    let x = column.min.x - 6.0;
+                    let painter = ui.painter();
+                    for (i, pos, galley) in &placed {
+                        let mut n = first.get(*i).copied().unwrap_or(1);
+                        let mut starts = true;
+                        for row in &galley.rows {
+                            if starts {
+                                let y = pos.y + row.pos.y + row.rect().height() / 2.0;
+                                painter.text(
+                                    egui::pos2(x, y),
+                                    egui::Align2::RIGHT_CENTER,
+                                    n.to_string(),
+                                    font.clone(),
+                                    color,
+                                );
+                            }
+                            if row.ends_with_newline {
+                                n = n.saturating_add(1);
+                            }
+                            starts = row.ends_with_newline;
+                        }
+                    }
                 }
                 // Arrastrar fuera del bloque: la selección sigue en el bloque bajo el puntero.
                 if let Some((di, anchor, pp)) = dragging

@@ -1039,7 +1039,7 @@ pub struct Hooks {
     /// Números de línea (del Markdown) en el margen izquierdo, junto al texto con formato.
     pub line_numbers: bool,
     /// Solo para leer: se ve igual que al editar (desplazar, seleccionar, copiar, seguir enlaces),
-    /// pero el texto no cambia.
+    /// pero el texto no cambia, salvo marcar o desmarcar una tarea.
     pub read_only: bool,
 }
 
@@ -1049,6 +1049,21 @@ pub const PAGE_MEDIUM: f32 = 48.0;
 pub const PAGE_WIDE: f32 = 64.0;
 /// Toda la ventana.
 pub const PAGE_FULL: f32 = f32::INFINITY;
+
+/// `after` es `before` con una sola casilla de tarea marcada o desmarcada.
+fn is_task_toggle(before: &str, after: &str) -> bool {
+    if before.len() != after.len() {
+        return false;
+    }
+    let diffs: Vec<usize> =
+        before.bytes().zip(after.bytes()).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| i).collect();
+    let [i] = diffs.as_slice() else { return false };
+    let mark = |c: Option<u8>| matches!(c, Some(b' ' | b'x' | b'X'));
+    mark(before.as_bytes().get(*i).copied())
+        && mark(after.as_bytes().get(*i).copied())
+        && before.as_bytes().get(i.wrapping_sub(1)) == Some(&b'[')
+        && before.as_bytes().get(i + 1) == Some(&b']')
+}
 
 /// Como [`show`], con los ganchos de la app.
 pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hooks) -> Output {
@@ -1070,10 +1085,14 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                 });
             });
         }
-        // Sobre una copia: si algo la cambiara (un clic en un dibujo), el texto queda igual.
+        // Sobre una copia: si algo la cambiara (un clic en un dibujo), el texto queda igual. Lo único
+        // que sí se acepta es marcar o desmarcar una tarea (`[ ]` ↔ `[x]`).
         let mut copy = text.clone();
         let mut out = show_hooks(ui, id, &mut copy, hint, Hooks { read_only: false, ..hooks });
-        out.changed = false;
+        out.changed = is_task_toggle(text, &copy);
+        if out.changed {
+            *text = copy;
+        }
         return out;
     }
     let diagrams = hooks.diagrams.clone();
@@ -2254,6 +2273,14 @@ pub fn apply_external(ctx: &egui::Context, id: Id, text: &mut String, edit: Exte
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_task_tick_counts_as_a_toggle() {
+        assert!(super::is_task_toggle("- [ ] uno\n", "- [x] uno\n"));
+        assert!(super::is_task_toggle("- [X] uno\n", "- [ ] uno\n"));
+        assert!(!super::is_task_toggle("- [ ] uno\n", "- [ ] unx\n"), "otro cambio");
+        assert!(!super::is_task_toggle("a [ ] b", "a [x] c"), "dos cambios");
+        assert!(!super::is_task_toggle("uno", "unos"));
+    }
 
     #[test]
     fn heading_levels_follow_markdown() {

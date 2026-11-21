@@ -1867,7 +1867,9 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                         let mut n = first.get(*i).copied().unwrap_or(1);
                         let mut starts = true;
                         for row in &galley.rows {
-                            if starts {
+                            // Las líneas vacías (renglones bajos) cuentan, pero no se numeran: si no, los
+                            // números se enciman.
+                            if starts && row.rect().height() >= style.size * 0.8 {
                                 let y = pos.y + row.pos.y + row.rect().height() / 2.0;
                                 painter.text(
                                     egui::pos2(x, y),

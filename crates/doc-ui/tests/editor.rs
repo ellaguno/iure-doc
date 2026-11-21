@@ -980,7 +980,7 @@ fn line_numbers_follow_the_markdown_lines() {
             let hooks = iure_doc_ui::Hooks { line_numbers: true, gutter: Some(40.0), ..Default::default() };
             iure_doc_ui::show_blocks_hooks(ui, Id::unique("lineas"), text, "", hooks);
         },
-        "uno\n\ndos\ntres\n".to_string(),
+        "uno\n\ndos\ntres\n\n- a\n\n- b\n".to_string(),
     );
     h.run_steps(2);
     let mut nums: Vec<String> = Vec::new();
@@ -993,5 +993,6 @@ fn line_numbers_follow_the_markdown_lines() {
         }
     }
     nums.sort();
-    assert_eq!(nums, ["1", "3", "4"]);
+    // La línea vacía dentro de la lista (7) cuenta pero no se numera.
+    assert_eq!(nums, ["1", "3", "4", "6", "8"]);
 }

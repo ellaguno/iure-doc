@@ -1038,6 +1038,9 @@ pub struct Hooks {
     pub gutter: Option<f32>,
     /// Números de línea (del Markdown) en el margen izquierdo, junto al texto con formato.
     pub line_numbers: bool,
+    /// Solo para leer: se ve igual que al editar (desplazar, seleccionar, copiar, seguir enlaces),
+    /// pero el texto no cambia.
+    pub read_only: bool,
 }
 
 /// Página mediana (como «Medio» de IureEditor 1.x: 48 em).
@@ -1049,6 +1052,30 @@ pub const PAGE_FULL: f32 = f32::INFINITY;
 
 /// Como [`show`], con los ganchos de la app.
 pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hooks) -> Output {
+    if hooks.read_only {
+        // Con el foco en el editor, lo que escribiría no llega (copiar y seleccionar todo, sí).
+        let active = ui.ctx().data(|d| d.get_temp::<State>(id)).is_some_and(|s| s.active);
+        if active {
+            ui.input_mut(|i| {
+                i.events.retain(|e| match e {
+                    egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => false,
+                    egui::Event::Key { key, modifiers, .. } => {
+                        if modifiers.command {
+                            matches!(key, Key::C | Key::A | Key::F)
+                        } else {
+                            !matches!(key, Key::Backspace | Key::Delete | Key::Enter | Key::Tab)
+                        }
+                    }
+                    _ => true,
+                });
+            });
+        }
+        // Sobre una copia: si algo la cambiara (un clic en un dibujo), el texto queda igual.
+        let mut copy = text.clone();
+        let mut out = show_hooks(ui, id, &mut copy, hint, Hooks { read_only: false, ..hooks });
+        out.changed = false;
+        return out;
+    }
     let diagrams = hooks.diagrams.clone();
     let mut style = EditorStyle::from_ui(ui);
     if let Some(z) = hooks.zoom.filter(|z| z.is_finite()) {

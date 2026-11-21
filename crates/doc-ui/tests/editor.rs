@@ -996,3 +996,38 @@ fn line_numbers_follow_the_markdown_lines() {
     // La línea vacía dentro de la lista (7) cuenta pero no se numera.
     assert_eq!(nums, ["1", "3", "4", "6", "8"]);
 }
+
+/// Solo para leer: se ve igual que el editor, pero lo tecleado no cambia el texto.
+#[test]
+fn read_only_shows_the_same_and_does_not_change() {
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        |ui, st: &mut State| {
+            let hooks = iure_doc_ui::Hooks { read_only: true, ..Default::default() };
+            let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("lectura"), &mut st.text, "", hooks);
+            assert!(!out.changed);
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "nota"));
+        },
+        State { text: "# Título\n\nUno\nDos\n".to_string() },
+    );
+    h.run_steps(2);
+    let r = h.get_by_label("nota").rect();
+    let p = egui::pos2(r.left() + 30.0, r.top() + 60.0);
+    h.event(egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.event(egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+    h.event(egui::Event::Text("XYZ".into()));
+    h.key_press(Key::Backspace);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().text, "# Título\n\nUno\nDos\n");
+}

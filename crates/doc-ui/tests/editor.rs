@@ -790,7 +790,7 @@ impl iure_doc_ui::DiagramRenderer for FakeMap {
             height: 10,
             rgba: vec![200; 20 * 10 * 4],
             points: [200.0, 100.0],
-            hotspots: vec![iure_doc_ui::Hotspot { id: 1, rect: [10.0, 10.0, 60.0, 30.0] }],
+            hotspots: vec![iure_doc_ui::Hotspot { id: 1, rect: [10.0, 10.0, 60.0, 30.0], ..Default::default() }],
         })
     }
     fn node_action(&self, block: &str, id: usize, a: iure_doc_ui::NodeAction) -> Option<(String, Option<usize>)> {
@@ -828,6 +828,158 @@ fn clicking_a_mind_map_node_offers_its_bar() {
     h.get_by_label("Añadir rama hija").click();
     h.run_steps(3);
     assert_eq!(h.state().text, "Antes\n\n> [!MINDMAP|map] C\n> - Uno\n>   - Nueva\n\nDespués\n");
+}
+
+// --- S1.33: acciones propias de un diagrama (cuadrantes) ---
+
+/// Un «cuadrante» falso: un punto arrastrable en (10,10)-(30,30); un hueco ofrece «Agregar aquí»
+/// (pide la etiqueta); el punto ofrece «Renombrar» (texto) y «Conectar con…» (otra zona).
+struct FakeQuad;
+
+impl iure_doc_ui::DiagramRenderer for FakeQuad {
+    fn accepts(&self, block: &str) -> bool {
+        block.starts_with("```cuad")
+    }
+    fn key(&self) -> u64 {
+        3
+    }
+    fn render(&self, _block: &str, _scale: f32) -> Result<iure_doc_ui::DiagramImage, String> {
+        Ok(iure_doc_ui::DiagramImage {
+            width: 20,
+            height: 10,
+            rgba: vec![220; 20 * 10 * 4],
+            points: [200.0, 100.0],
+            hotspots: vec![
+                iure_doc_ui::Hotspot { id: 0, rect: [10.0, 10.0, 30.0, 30.0], draggable: true },
+                iure_doc_ui::Hotspot { id: 1, rect: [150.0, 10.0, 170.0, 30.0], draggable: false },
+            ],
+        })
+    }
+    fn canvas_actions(&self, _block: &str, _at: [f32; 2]) -> Vec<iure_doc_ui::ActionDef> {
+        vec![iure_doc_ui::ActionDef {
+            id: 1,
+            icon: iurefficient_ui::icons::Icon::Plus,
+            label: "Agregar aquí".into(),
+            input: iure_doc_ui::ActionInput::Text { prompt: "Etiqueta".into(), initial: String::new() },
+        }]
+    }
+    fn spot_actions(&self, _block: &str, _id: usize) -> Vec<iure_doc_ui::ActionDef> {
+        vec![iure_doc_ui::ActionDef {
+            id: 2,
+            icon: iurefficient_ui::icons::Icon::Hyperlink,
+            label: "Conectar con…".into(),
+            input: iure_doc_ui::ActionInput::OtherSpot("Elige el destino".into()),
+        }]
+    }
+    fn apply(
+        &self,
+        block: &str,
+        target: iure_doc_ui::Target,
+        action: u32,
+        data: iure_doc_ui::ActionData,
+    ) -> Option<(String, Option<usize>)> {
+        let body = block.trim_end().strip_suffix("```")?;
+        let line = match (target, action, data) {
+            (iure_doc_ui::Target::Canvas([x, y]), 1, iure_doc_ui::ActionData::Text(t)) => {
+                format!("{t} {:.0} {:.0}", x / 10.0, y / 10.0)
+            }
+            (iure_doc_ui::Target::Spot(a), 2, iure_doc_ui::ActionData::Spot(b)) => format!("{a} --> {b}"),
+            _ => return None,
+        };
+        Some((format!("{body}{line}\n```"), None))
+    }
+    fn drag(&self, block: &str, id: usize, to: [f32; 2]) -> Option<String> {
+        let body = block.trim_end().strip_suffix("```")?;
+        Some(format!("{body}mover {id} {:.0} {:.0}\n```", to[0] / 10.0, to[1] / 10.0))
+    }
+}
+
+fn click(h: &mut Harness<'static, State>, p: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(p));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+    }
+    h.run_steps(3);
+}
+
+fn quad_harness() -> Harness<'static, State> {
+    iurefficient_ui::lang::set_lang(iurefficient_ui::lang::Lang::Es);
+    let r: std::sync::Arc<dyn iure_doc_ui::DiagramRenderer> = std::sync::Arc::new(FakeQuad);
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let out = iure_doc_ui::show_blocks_with(ui, Id::unique("cuad"), &mut st.text, "Escribe", Some(r.clone()));
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        State { text: "```cuad\n```\n".to_string() },
+    );
+    assert!(wait_for(&mut h, "Diagrama 1"));
+    h
+}
+
+/// Un clic en un hueco ofrece «Agregar aquí»; pide la etiqueta en un globo y la app recibe el lugar.
+#[test]
+fn a_click_on_empty_space_adds_with_a_label() {
+    let mut h = quad_harness();
+    let img = h.get_by_label("Diagrama 1").rect();
+    let k = img.width() / 200.0;
+    click(&mut h, img.min + egui::vec2(100.0 * k, 50.0 * k));
+    assert!(h.query_by_label("Diagrama 1").is_some(), "el hueco no abre el código");
+    h.get_by_label("Agregar aquí").click();
+    h.run_steps(3);
+    h.event(egui::Event::Text("Idea".into()));
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().text, "```cuad\nIdea 10 5\n```\n");
+}
+
+/// «Conectar con…»: se elige la zona de origen, la acción y luego la de destino.
+#[test]
+fn an_action_can_ask_for_another_spot() {
+    let mut h = quad_harness();
+    let img = h.get_by_label("Diagrama 1").rect();
+    let k = img.width() / 200.0;
+    click(&mut h, img.min + egui::vec2(20.0 * k, 20.0 * k));
+    h.get_by_label("Conectar con…").click();
+    h.run_steps(2);
+    click(&mut h, img.min + egui::vec2(160.0 * k, 20.0 * k));
+    assert_eq!(h.state().text, "```cuad\n0 --> 1\n```\n");
+}
+
+/// Un punto arrastrable se mueve: al soltarlo, la app recibe dónde quedó.
+#[test]
+fn a_draggable_spot_moves() {
+    let mut h = quad_harness();
+    let img = h.get_by_label("Diagrama 1").rect();
+    let k = img.width() / 200.0;
+    let from = img.min + egui::vec2(20.0 * k, 20.0 * k);
+    let to = img.min + egui::vec2(120.0 * k, 70.0 * k);
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+    for t in 1..=5 {
+        let p = from + (to - from) * (t as f32 / 5.0);
+        h.event(egui::Event::PointerMoved(p));
+        h.run();
+    }
+    h.event(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(3);
+    assert_eq!(h.state().text, "```cuad\nmover 0 12 7\n```\n");
 }
 
 /// Regresión (dueño 2026-11-20): un diagrama al final (o al principio) no dejaba escribir después

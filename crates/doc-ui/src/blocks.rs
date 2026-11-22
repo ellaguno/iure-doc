@@ -515,83 +515,231 @@ fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
     })
 }
 
-/// Los nodos que se pueden pulsar de un dibujo (`spots`, en puntos del dibujo de tamaño `size`):
-/// un clic elige uno (se resalta y aparece su barra: rama hija, hermana, borrar), doble clic lleva
-/// a su texto, Esc o un clic fuera lo suelta. Devuelve si el clic cayó en un nodo y la acción pedida.
+/// Lo que pidió la barra de un dibujo.
+enum OverlayAct {
+    /// Una acción de los mapas mentales ([`crate::DiagramRenderer::node_action`]).
+    Node(usize, crate::NodeAction),
+    /// El bloque ya cambiado (S1.33: acción con su dato o un arrastre) y dónde dejar el cursor.
+    Block(String, Option<usize>),
+}
+
+/// Estado de la barra de un dibujo (entre cuadros).
+#[derive(Clone, Default)]
+struct Overlay {
+    /// Lo elegido: una zona o un hueco.
+    sel: Option<crate::Target>,
+    /// Una acción esperando su texto (el globo) y lo escrito.
+    asking: Option<(crate::Target, crate::ActionDef)>,
+    text: String,
+    focus_text: bool,
+    /// Una acción esperando que se pulse otra zona.
+    picking: Option<(crate::Target, crate::ActionDef)>,
+    /// La zona que se arrastra.
+    drag: Option<usize>,
+}
+
+/// La barra de las zonas de un dibujo: elegir una zona (un clic) o un hueco y sus acciones; el
+/// globo del texto, elegir otra zona y arrastrar. Devuelve si el clic fue para la barra (no para
+/// editar el código) y lo pedido.
 fn node_overlay(
     ui: &Ui,
     key: Id,
     resp: &egui::Response,
     size: egui::Vec2,
     spots: &[crate::Hotspot],
-) -> (bool, Option<(usize, crate::NodeAction)>) {
-    use crate::NodeAction;
-    if spots.is_empty() {
-        return (false, None);
-    }
+    r: &dyn crate::DiagramRenderer,
+    content: &str,
+) -> (bool, Option<OverlayAct>) {
+    use crate::{ActionData, ActionInput, NodeAction, Target};
+    use iurefficient_ui::icons::{Icon, icon_button};
+    let pick = iurefficient_ui::lang::pick;
     let img = resp.rect;
     let k = img.width() / size.x.max(1.0);
     let screen = |r: [f32; 4]| {
         egui::Rect::from_min_max(img.min + egui::vec2(r[0] * k, r[1] * k), img.min + egui::vec2(r[2] * k, r[3] * k))
     };
-    let at = |p: egui::Pos2| spots.iter().find(|s| screen(s.rect).expand(2.0).contains(p)).map(|s| s.id);
-    let mut sel = ui.data(|d| d.get_temp::<usize>(key));
-    let mut act = None;
+    let local = |p: egui::Pos2| [(p.x - img.min.x) / k.max(f32::EPSILON), (p.y - img.min.y) / k.max(f32::EPSILON)];
+    let at = |p: egui::Pos2| spots.iter().find(|s| screen(s.rect).expand(2.0).contains(p));
+    let mut st = ui.data(|d| d.get_temp::<Overlay>(key)).unwrap_or_default();
+    let mut act: Option<OverlayAct> = None;
     let mut hit = false;
-    if let Some(p) = resp.hover_pos()
-        && at(p).is_some()
+    let do_apply = |t: Target, a: &crate::ActionDef, data: ActionData| {
+        r.apply(content, t, a.id, data).map(|(b, c)| OverlayAct::Block(b, c))
+    };
+    // Cursor: mano sobre una zona; «mover» sobre una arrastrable.
+    if let Some(p) = resp.hover_pos() {
+        match at(p) {
+            Some(s) if s.draggable => ui.ctx().set_cursor_icon(egui::CursorIcon::Grab),
+            Some(_) => ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand),
+            None if st.picking.is_some() => ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed),
+            None => {}
+        }
+    }
+    // Arrastrar una zona: un fantasma bajo el puntero; al soltar, la app cambia el bloque.
+    // Se busca la zona donde empezó a apretarse (al notarse el arrastre, el puntero ya se movió).
+    if resp.drag_started()
+        && let Some(s) = ui.input(|i| i.pointer.press_origin()).and_then(at).filter(|s| s.draggable)
     {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        st.drag = Some(s.id);
+        st.sel = Some(Target::Spot(s.id));
+        hit = true;
+    }
+    if let Some(id) = st.drag {
+        hit = true;
+        if let Some(p) = ui.ctx().pointer_latest_pos() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            let accent = ui.visuals().selection.stroke.color;
+            ui.painter().circle(p, 6.0, accent.gamma_multiply(0.5), egui::Stroke::new(1.5, accent));
+            if resp.drag_stopped() {
+                st.drag = None;
+                if img.contains(p) {
+                    act = r.drag(content, id, local(p)).map(|b| OverlayAct::Block(b, None));
+                }
+            }
+        }
+        if !ui.input(|i| i.pointer.any_down()) {
+            st.drag = None;
+        }
     }
     if resp.clicked() || resp.double_clicked() {
-        let id = resp.interact_pointer_pos().and_then(at);
-        hit = id.is_some();
-        sel = id;
-        if resp.double_clicked()
-            && let Some(id) = id
+        let p = resp.interact_pointer_pos();
+        let spot = p.and_then(at).map(|s| s.id);
+        if let Some((t, a)) = st.picking.take() {
+            // Elegir la otra zona («Conectar con…»): un clic en un hueco cancela.
+            hit = true;
+            if let Some(id) = spot {
+                act = do_apply(t, &a, ActionData::Spot(id));
+            }
+        } else if let Some(id) = spot {
+            hit = true;
+            st.sel = Some(Target::Spot(id));
+            st.asking = None;
+            if resp.double_clicked() {
+                act = Some(OverlayAct::Node(id, NodeAction::Goto));
+            }
+        } else if let Some(p) = p
+            && !resp.double_clicked()
+            && !r.canvas_actions(content, local(p)).is_empty()
         {
-            act = Some((id, NodeAction::Goto));
+            hit = true;
+            st.sel = Some(Target::Canvas(local(p)));
+            st.asking = None;
+        } else {
+            st.sel = None;
         }
     }
     if ui.input(|i| i.key_pressed(Key::Escape)) {
-        sel = None;
+        st = Overlay::default();
     }
-    if let Some(id) = sel
-        && let Some(spot) = spots.iter().find(|s| s.id == id)
-    {
-        let r = screen(spot.rect).expand(3.0);
-        let accent = ui.visuals().selection.stroke.color;
-        ui.painter().rect_stroke(r, 6.0, egui::Stroke::new(2.0, accent), egui::StrokeKind::Outside);
-        let pick = iurefficient_ui::lang::pick;
-        egui::Area::new(key.with("bar"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(r.left_bottom() + egui::vec2(0.0, 6.0))
-            .show(ui.ctx(), |ui| {
+    // Lo elegido, marcado.
+    let accent = ui.visuals().selection.stroke.color;
+    let anchor = match st.sel {
+        Some(Target::Spot(id)) => spots.iter().find(|s| s.id == id).map(|s| {
+            let r = screen(s.rect).expand(3.0);
+            ui.painter().rect_stroke(r, 6.0, egui::Stroke::new(2.0, accent), egui::StrokeKind::Outside);
+            r.left_bottom()
+        }),
+        Some(Target::Canvas([x, y])) => {
+            let p = img.min + egui::vec2(x * k, y * k);
+            ui.painter().circle_stroke(p, 5.0, egui::Stroke::new(2.0, accent));
+            Some(p + egui::vec2(-4.0, 6.0))
+        }
+        None => None,
+    };
+    if let (Some(t), Some(pos)) = (st.sel, anchor) {
+        let defs = match t {
+            Target::Spot(id) => r.spot_actions(content, id),
+            Target::Canvas(p) => r.canvas_actions(content, p),
+        };
+        egui::Area::new(key.with("bar")).order(egui::Order::Foreground).fixed_pos(pos + egui::vec2(0.0, 6.0)).show(
+            ui.ctx(),
+            |ui| {
                 egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
+                    if let Some((_, a)) = &st.picking {
+                        if let ActionInput::OtherSpot(prompt) = &a.input {
+                            ui.label(prompt.as_str());
+                        }
+                        return;
+                    }
+                    if let Some((at_t, a)) = st.asking.clone() {
+                        // El globo del texto.
+                        if let ActionInput::Text { prompt, .. } = &a.input {
+                            ui.label(prompt.as_str());
+                        }
+                        ui.horizontal(|ui| {
+                            let te = ui.add(egui::TextEdit::singleline(&mut st.text).desired_width(220.0));
+                            if std::mem::take(&mut st.focus_text) {
+                                te.request_focus();
+                            }
+                            let enter = te.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                            if ui.button(pick("OK", "Aceptar")).clicked() || enter {
+                                act = do_apply(at_t, &a, ActionData::Text(std::mem::take(&mut st.text)));
+                                st.asking = None;
+                            }
+                        });
+                        return;
+                    }
                     ui.horizontal(|ui| {
-                        use iurefficient_ui::icons::{Icon, icon_button};
-                        if icon_button(ui, Icon::Indent, pick("Add child branch", "Añadir rama hija"), true).clicked()
-                        {
-                            act = Some((id, NodeAction::AddChild));
+                        if defs.is_empty() {
+                            // Los mapas mentales (la barra de siempre).
+                            let Target::Spot(id) = t else { return };
+                            if icon_button(ui, Icon::Indent, pick("Add child branch", "Añadir rama hija"), true)
+                                .clicked()
+                            {
+                                act = Some(OverlayAct::Node(id, NodeAction::AddChild));
+                            }
+                            if icon_button(ui, Icon::Plus, pick("Add sibling branch", "Añadir rama hermana"), true)
+                                .clicked()
+                            {
+                                act = Some(OverlayAct::Node(id, NodeAction::AddSibling));
+                            }
+                            if icon_button(ui, Icon::Trash, pick("Delete branch", "Eliminar rama"), true).clicked() {
+                                act = Some(OverlayAct::Node(id, NodeAction::Delete));
+                            }
+                            return;
                         }
-                        if icon_button(ui, Icon::Plus, pick("Add sibling branch", "Añadir rama hermana"), true)
-                            .clicked()
-                        {
-                            act = Some((id, NodeAction::AddSibling));
-                        }
-                        if icon_button(ui, Icon::Trash, pick("Delete branch", "Eliminar rama"), true).clicked() {
-                            act = Some((id, NodeAction::Delete));
+                        for a in &defs {
+                            let b = icon_button(ui, a.icon, &a.label, true);
+                            match &a.input {
+                                ActionInput::None => {
+                                    if b.clicked() {
+                                        act = do_apply(t, a, ActionData::None);
+                                    }
+                                }
+                                ActionInput::Text { initial, .. } => {
+                                    if b.clicked() {
+                                        st.text = initial.clone();
+                                        st.focus_text = true;
+                                        st.asking = Some((t, a.clone()));
+                                    }
+                                }
+                                ActionInput::OtherSpot(_) => {
+                                    if b.clicked() {
+                                        st.picking = Some((t, a.clone()));
+                                    }
+                                }
+                                ActionInput::Choice(opts) => {
+                                    egui::Popup::menu(&b).show(|ui| {
+                                        for (n, o) in opts.iter().enumerate() {
+                                            if ui.button(o.as_str()).clicked() {
+                                                act = do_apply(t, a, ActionData::Choice(n));
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                                }
+                            }
                         }
                     });
                 });
-            });
+            },
+        );
     }
-    ui.data_mut(|d| match sel {
-        Some(id) => {
-            d.insert_temp(key, id);
-        }
-        None => d.remove::<usize>(key),
-    });
+    // Hecha una acción, la barra se cierra (la zona puede haber cambiado de número).
+    if matches!(act, Some(OverlayAct::Block(..))) {
+        st = Overlay::default();
+    }
+    ui.data_mut(|d| d.insert_temp(key, st));
     (hit, act)
 }
 
@@ -1442,8 +1590,15 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                                     } else {
                                         pick("Click to edit the diagram", "Clic para editar el diagrama")
                                     };
+                                    let content_now =
+                                        st.blocks.chunks.get(i).map(|c| c.content.clone()).unwrap_or_default();
+                                    // Con zonas arrastrables (puntos de un cuadrante), el dibujo también se arrastra.
+                                    let draggable =
+                                        st.diagrams.hotspots(ui.ctx(), r, &content_now).iter().any(|s| s.draggable);
+                                    let sense =
+                                        if draggable { egui::Sense::click_and_drag() } else { egui::Sense::click() };
                                     let resp = ui
-                                        .add(egui::Image::new((tex.id(), egui::vec2(w, h))).sense(egui::Sense::click()))
+                                        .add(egui::Image::new((tex.id(), egui::vec2(w, h))).sense(sense))
                                         .on_hover_text(hover)
                                         .on_hover_cursor(egui::CursorIcon::PointingHand);
                                     let pos = i + 1;
@@ -1461,20 +1616,28 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                                         st.blocks.chunks.get(i).map(|c| c.content.clone()).unwrap_or_default();
                                     // Los nodos de un mapa mental: elegir uno y su barra.
                                     let spots = st.diagrams.hotspots(ui.ctx(), r, &content);
-                                    let (on_node, node_act) = node_overlay(ui, fid.with("nodos"), &resp, size, &spots);
+                                    let (on_node, node_act) =
+                                        node_overlay(ui, fid.with("nodos"), &resp, size, &spots, r.as_ref(), &content);
                                     if resp.clicked() && !on_node {
                                         if let Some(c) = st.blocks.chunks.get_mut(i) {
                                             c.raw = true;
                                         }
                                         st.focus = Some((uid, 0));
                                     }
-                                    if let Some((id, a)) = node_act
-                                        && let Some((n, caret)) = r.node_action(&content, id, a)
+                                    let (n, caret, goto) = match node_act {
+                                        Some(OverlayAct::Node(id, a)) => match r.node_action(&content, id, a) {
+                                            Some((n, caret)) => (Some(n), caret, a == crate::NodeAction::Goto),
+                                            None => (None, None, false),
+                                        },
+                                        Some(OverlayAct::Block(n, caret)) => (Some(n), caret, false),
+                                        None => (None, None, false),
+                                    };
+                                    if let Some(n) = n
                                         && let Some(c) = st.blocks.chunks.get_mut(i)
                                     {
                                         let changed_text = c.content != n;
                                         c.content = n;
-                                        if a == crate::NodeAction::Goto {
+                                        if goto {
                                             c.raw = true;
                                             st.focus = Some((uid, caret.unwrap_or(0)));
                                         } else if changed_text && act.is_none() {
@@ -1768,10 +1931,15 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
                         // cursor en la rama nueva.
                         if let (Some(r), Some((_, sz))) = (diagrams.as_ref(), side.as_ref()) {
                             let spots = st.diagrams.hotspots(ui.ctx(), r, &c.content);
-                            let (_, node_act) = node_overlay(ui, fid.with("nodos"), img, *sz, &spots);
-                            if let Some((id, a)) = node_act
-                                && let Some((n, caret)) = r.node_action(&c.content, id, a)
-                            {
+                            let content = c.content.clone();
+                            let (_, node_act) =
+                                node_overlay(ui, fid.with("nodos"), img, *sz, &spots, r.as_ref(), &content);
+                            let done = match node_act {
+                                Some(OverlayAct::Node(id, a)) => r.node_action(&c.content, id, a),
+                                Some(OverlayAct::Block(n, caret)) => Some((n, caret)),
+                                None => None,
+                            };
+                            if let Some((n, caret)) = done {
                                 if c.content != n {
                                     c.content = n;
                                     templated = true;

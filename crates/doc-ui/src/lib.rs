@@ -58,7 +58,9 @@ pub use blocks::{
     ExternalEdit, Hooks, PAGE_FULL, PAGE_MEDIUM, PAGE_WIDE, apply_external, caret_offset, focus_offset, open_find,
     select_all, selection, show as show_blocks, show_hooks as show_blocks_hooks, show_with as show_blocks_with,
 };
-pub use diagrams::{DiagramImage, DiagramRenderer, Hotspot, NodeAction, Placement};
+pub use diagrams::{
+    ActionData, ActionDef, ActionInput, DiagramImage, DiagramRenderer, Hotspot, NodeAction, Placement, Target,
+};
 pub use highlight::wait_ready as wait_highlighting;
 pub use image_store::{FolderImages, ImageStore, PastedImage};
 pub use images::{LocalImages, Renderers};

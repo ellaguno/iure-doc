@@ -246,6 +246,28 @@ impl DiagramRenderer for Renderers {
     ) -> Option<(String, Option<usize>)> {
         self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.node_action(block, id, action))
     }
+
+    fn spot_actions(&self, block: &str, id: usize) -> Vec<crate::ActionDef> {
+        self.0.iter().find(|r| r.accepts(block)).map(|r| r.spot_actions(block, id)).unwrap_or_default()
+    }
+
+    fn canvas_actions(&self, block: &str, at: [f32; 2]) -> Vec<crate::ActionDef> {
+        self.0.iter().find(|r| r.accepts(block)).map(|r| r.canvas_actions(block, at)).unwrap_or_default()
+    }
+
+    fn apply(
+        &self,
+        block: &str,
+        target: crate::Target,
+        action: u32,
+        data: crate::ActionData,
+    ) -> Option<(String, Option<usize>)> {
+        self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.apply(block, target, action, data))
+    }
+
+    fn drag(&self, block: &str, id: usize, to: [f32; 2]) -> Option<String> {
+        self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.drag(block, id, to))
+    }
 }
 
 #[cfg(test)]

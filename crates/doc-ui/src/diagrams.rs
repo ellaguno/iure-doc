@@ -12,10 +12,57 @@ use std::sync::{Arc, Mutex};
 
 /// Una zona del dibujo que se puede pulsar (un nodo de un mapa mental): su número para la app y
 /// su rectángulo en puntos, desde la esquina del dibujo (`[x0, y0, x1, y1]`).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Hotspot {
     pub id: usize,
     pub rect: [f32; 4],
+    /// Se puede arrastrar (un punto de un diagrama de cuadrantes): al soltarlo se llama a
+    /// [`DiagramRenderer::drag`].
+    pub draggable: bool,
+}
+
+/// Lo que pide una acción antes de hacerse (S1.33).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ActionInput {
+    /// Nada: se hace al pulsarla.
+    None,
+    /// Un texto, en un globo junto al dibujo (`prompt` lo explica; `initial` ya viene escrito).
+    Text { prompt: String, initial: String },
+    /// Elegir una de estas opciones (sus nombres).
+    Choice(Vec<String>),
+    /// Pulsar otra zona del dibujo (`prompt` lo explica: «Elige el nodo de destino»).
+    OtherSpot(String),
+}
+
+/// Una acción que la app ofrece sobre una zona del dibujo o sobre un hueco.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActionDef {
+    /// Su número para la app.
+    pub id: u32,
+    pub icon: iurefficient_ui::icons::Icon,
+    /// Nombre (se ve al pasar y lo lee el lector de pantalla).
+    pub label: String,
+    pub input: ActionInput,
+}
+
+/// Sobre qué se hace una acción.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Target {
+    /// Una zona ([`Hotspot::id`]).
+    Spot(usize),
+    /// Un hueco del dibujo, en puntos desde su esquina (como [`Hotspot::rect`]).
+    Canvas([f32; 2]),
+}
+
+/// El dato que pidió la acción.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ActionData {
+    None,
+    Text(String),
+    /// El número de la opción elegida.
+    Choice(usize),
+    /// La otra zona pulsada.
+    Spot(usize),
 }
 
 /// Lo que se pide sobre una zona del dibujo (barra de un nodo de un mapa mental).
@@ -64,6 +111,26 @@ pub trait DiagramRenderer: Send + Sync {
     /// Una acción sobre la zona `id` del dibujo: el bloque nuevo y, si se da, dónde dejar el cursor
     /// (carácter del bloque).
     fn node_action(&self, _block: &str, _id: usize, _action: NodeAction) -> Option<(String, Option<usize>)> {
+        None
+    }
+    /// S1.33: las acciones de la zona `id` (vacío: la barra de los mapas mentales, con
+    /// [`DiagramRenderer::node_action`]).
+    fn spot_actions(&self, _block: &str, _id: usize) -> Vec<ActionDef> {
+        Vec::new()
+    }
+    /// Las acciones de un hueco del dibujo (`at`, en puntos): «agregar aquí». Vacío: un clic en el
+    /// hueco edita el código, como siempre.
+    fn canvas_actions(&self, _block: &str, _at: [f32; 2]) -> Vec<ActionDef> {
+        Vec::new()
+    }
+    /// Hace la acción `action` sobre `target` con su dato: el bloque nuevo y, si se da, dónde dejar
+    /// el cursor (carácter del bloque).
+    fn apply(&self, _block: &str, _target: Target, _action: u32, _data: ActionData) -> Option<(String, Option<usize>)> {
+        None
+    }
+    /// La zona arrastrable `id` se soltó en `to` (puntos desde la esquina del dibujo): el bloque
+    /// nuevo.
+    fn drag(&self, _block: &str, _id: usize, _to: [f32; 2]) -> Option<String> {
         None
     }
 }

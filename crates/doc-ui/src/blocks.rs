@@ -1358,13 +1358,17 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
             }
         }
     }
+    // Un pegado interno (una imagen soltada o guardada): ya es Markdown, no viene del portapapeles.
+    let mut internal_paste = false;
     if st.active
         && let Some(md) = st.pending_paste.take()
     {
         ui.input_mut(|i| i.events.push(egui::Event::Paste(md)));
+        internal_paste = true;
     }
     // Ctrl+Mayús+V: texto plano.
     if st.active
+        && !internal_paste
         && let Some(p) = hooks.paste.as_ref()
         && !ui.input(|i| i.modifiers.shift)
         && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))

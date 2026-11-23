@@ -622,6 +622,41 @@ fn text_in_the_clipboard_wins_over_the_image() {
     assert!(!dir.path().join("img").exists(), "no se guardó ninguna imagen");
 }
 
+/// El portapapeles con HTML de otra app (una imagen de la web) y sin texto.
+struct OtherAppHtml;
+
+impl iure_doc_ui::PasteSource for OtherAppHtml {
+    fn html(&self) -> Option<String> {
+        Some("<img src=\"blob:https://web.example.com/1234\">".into())
+    }
+}
+
+/// Regresión (2026-11-23): soltar una imagen la inserta como un pegado interno, y ese pegado se
+/// cambiaba por el HTML que hubiera en el portapapeles (lo copiado antes en otra app).
+#[test]
+fn dropping_an_image_ignores_the_clipboard() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let src = outside.path().join("logo.png");
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255])).save(&src).unwrap();
+    let hooks = iure_doc_ui::Hooks {
+        paste: Some(std::sync::Arc::new(OtherAppHtml)),
+        images: Some(std::sync::Arc::new(iure_doc_ui::FolderImages::new(Some(dir.path().to_path_buf()), "img"))),
+        ..Default::default()
+    };
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("drop"), &mut st.text, "Escribe", hooks.clone());
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, "bloques"));
+        },
+        State { text: "Antes\n".to_string() },
+    );
+    h.run_steps(2);
+    h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped(src)));
+    h.run_steps(4);
+    assert_eq!(h.state().text, "Antes\n\n![logo](img/logo.png)\n");
+}
+
 #[test]
 fn dropping_an_image_file_copies_and_inserts_it() {
     let dir = tempfile::tempdir().unwrap();

@@ -538,6 +538,32 @@ struct Overlay {
     picking: Option<(crate::Target, crate::ActionDef)>,
     /// La zona que se arrastra.
     drag: Option<usize>,
+    /// Tamaño de la barra en el cuadro anterior (para colocarla sin tapar otras zonas).
+    bar_size: Option<egui::Vec2>,
+}
+
+/// Dónde va la barra de `sel` (en pantalla): el primer lugar —debajo, arriba, a la derecha, a la
+/// izquierda— donde no tapa otra zona y cabe en `room`; si ninguno, debajo.
+fn bar_place(sel: egui::Rect, size: egui::Vec2, others: &[egui::Rect], room: egui::Rect) -> egui::Pos2 {
+    const GAP: f32 = 6.0;
+    let below = egui::pos2(sel.left(), sel.bottom() + GAP);
+    let candidates = [
+        below,
+        egui::pos2(sel.left(), sel.top() - GAP - size.y),
+        egui::pos2(sel.right() + GAP, sel.center().y - size.y / 2.0),
+        egui::pos2(sel.left() - GAP - size.x, sel.center().y - size.y / 2.0),
+    ];
+    let free = |p: &egui::Pos2| {
+        let r = egui::Rect::from_min_size(*p, size);
+        !others.iter().any(|o| o.intersects(r))
+    };
+    let fits = |p: &egui::Pos2| room.contains_rect(egui::Rect::from_min_size(*p, size));
+    candidates
+        .iter()
+        .find(|p| free(p) && fits(p))
+        .or_else(|| candidates.iter().find(|p| free(p)))
+        .copied()
+        .unwrap_or(below)
 }
 
 /// La barra de las zonas de un dibujo: elegir una zona (un clic) o un hueco y sus acciones; el
@@ -635,27 +661,35 @@ fn node_overlay(
     }
     // Lo elegido, marcado.
     let accent = ui.visuals().selection.stroke.color;
-    let anchor = match st.sel {
+    let marked = match st.sel {
         Some(Target::Spot(id)) => spots.iter().find(|s| s.id == id).map(|s| {
             let r = screen(s.rect).expand(3.0);
             ui.painter().rect_stroke(r, 6.0, egui::Stroke::new(2.0, accent), egui::StrokeKind::Outside);
-            r.left_bottom()
+            (r, Some(id))
         }),
         Some(Target::Canvas([x, y])) => {
             let p = img.min + egui::vec2(x * k, y * k);
             ui.painter().circle_stroke(p, 5.0, egui::Stroke::new(2.0, accent));
-            Some(p + egui::vec2(-4.0, 6.0))
+            Some((egui::Rect::from_center_size(p, egui::vec2(10.0, 10.0)), None))
         }
         None => None,
     };
+    // La barra no tapa las otras zonas (los nodos vecinos) si hay un lugar libre.
+    let anchor = marked.map(|(r, id)| {
+        let others: Vec<egui::Rect> =
+            spots.iter().filter(|s| Some(s.id) != id).map(|s| screen(s.rect).expand(2.0)).collect();
+        let size = st.bar_size.unwrap_or(egui::vec2(140.0, 28.0));
+        bar_place(r, size, &others, ui.clip_rect()) - egui::vec2(0.0, 6.0)
+    });
     if let (Some(t), Some(pos)) = (st.sel, anchor) {
         let defs = match t {
             Target::Spot(id) => r.spot_actions(content, id),
             Target::Canvas(p) => r.canvas_actions(content, p),
         };
-        egui::Area::new(key.with("bar")).order(egui::Order::Foreground).fixed_pos(pos + egui::vec2(0.0, 6.0)).show(
-            ui.ctx(),
-            |ui| {
+        let shown = egui::Area::new(key.with("bar"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos + egui::vec2(0.0, 6.0))
+            .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
                     if let Some((_, a)) = &st.picking {
                         if let ActionInput::OtherSpot(prompt) = &a.input {
@@ -753,8 +787,12 @@ fn node_overlay(
                         }
                     });
                 });
-            },
-        );
+            });
+        let size = shown.response.rect.size();
+        if st.bar_size != Some(size) {
+            st.bar_size = Some(size);
+            ui.ctx().request_repaint();
+        }
     }
     // Hecha una acción, la barra se cierra (la zona puede haber cambiado de número).
     if matches!(act, Some(OverlayAct::Block(..))) {

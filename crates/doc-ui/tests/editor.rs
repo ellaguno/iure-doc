@@ -887,6 +887,8 @@ impl iure_doc_ui::DiagramRenderer for FakeQuad {
             hotspots: vec![
                 iure_doc_ui::Hotspot { id: 0, rect: [10.0, 10.0, 30.0, 30.0], draggable: true },
                 iure_doc_ui::Hotspot { id: 1, rect: [150.0, 10.0, 170.0, 30.0], draggable: false },
+                // Justo debajo del 0: la barra del 0 no debe taparlo.
+                iure_doc_ui::Hotspot { id: 2, rect: [10.0, 40.0, 30.0, 60.0], draggable: false },
             ],
         })
     }
@@ -1016,6 +1018,20 @@ fn an_action_can_ask_for_a_choice_and_then_a_text() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert_eq!(h.state().text, "```cuad\n0 siguiente 1 Paso\n```\n");
+}
+
+/// Regresión (dueño 2026-11-23): la barra tapaba el nodo de abajo. Ahora busca un lugar libre.
+#[test]
+fn the_bar_does_not_cover_the_neighbour() {
+    let mut h = quad_harness();
+    let img = h.get_by_label("Diagrama 1").rect();
+    let k = img.width() / 200.0;
+    click(&mut h, img.min + egui::vec2(20.0 * k, 20.0 * k));
+    h.run_steps(3);
+    let bar = h.get_by_label("Conectar con…").rect().union(h.get_by_label("Agregar siguiente").rect());
+    let below =
+        egui::Rect::from_min_max(img.min + egui::vec2(10.0 * k, 40.0 * k), img.min + egui::vec2(30.0 * k, 60.0 * k));
+    assert!(!bar.intersects(below), "la barra {bar:?} tapa el nodo de abajo {below:?}");
 }
 
 /// Un punto arrastrable se mueve: al soltarlo, la app recibe dónde quedó.

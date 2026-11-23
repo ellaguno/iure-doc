@@ -871,6 +871,9 @@ fn clicking_a_mind_map_node_offers_its_bar() {
 /// (pide la etiqueta); el punto ofrece «Renombrar» (texto) y «Conectar con…» (otra zona).
 struct FakeQuad;
 
+/// Se pidió la guía del arrastre.
+static HINT_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 impl iure_doc_ui::DiagramRenderer for FakeQuad {
     fn accepts(&self, block: &str) -> bool {
         block.starts_with("```cuad")
@@ -941,6 +944,10 @@ impl iure_doc_ui::DiagramRenderer for FakeQuad {
     }
     fn spot_label(&self, _block: &str, id: usize) -> Option<String> {
         ["Uno", "Dos", "Tres"].get(id).map(|s| s.to_string())
+    }
+    fn drag_hint(&self, _block: &str, _id: usize, to: [f32; 2]) -> Option<String> {
+        HINT_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
+        Some(format!("{:.0}, {:.0}", to[0], to[1]))
     }
     fn drag(&self, block: &str, id: usize, to: [f32; 2]) -> Option<String> {
         let body = block.trim_end().strip_suffix("```")?;
@@ -1086,6 +1093,7 @@ fn a_draggable_spot_moves() {
     });
     h.run_steps(3);
     assert_eq!(h.state().text, "```cuad\nmover 0 12 7\n```\n");
+    assert!(HINT_ASKED.load(std::sync::atomic::Ordering::Relaxed), "mientras se arrastra se muestra la guía");
 }
 
 /// Regresión (dueño 2026-11-20): un diagrama al final (o al principio) no dejaba escribir después

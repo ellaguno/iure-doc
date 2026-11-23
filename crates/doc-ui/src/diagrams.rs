@@ -138,6 +138,11 @@ pub trait DiagramRenderer: Send + Sync {
     fn spot_label(&self, _block: &str, _id: usize) -> Option<String> {
         None
     }
+    /// Lo que se muestra junto al puntero mientras se arrastra la zona `id` hasta `to` (las
+    /// coordenadas de un punto, la fecha de una tarea…).
+    fn drag_hint(&self, _block: &str, _id: usize, _to: [f32; 2]) -> Option<String> {
+        None
+    }
     /// La zona arrastrable `id` se soltó en `to` (puntos desde la esquina del dibujo): el bloque
     /// nuevo.
     fn drag(&self, _block: &str, _id: usize, _to: [f32; 2]) -> Option<String> {

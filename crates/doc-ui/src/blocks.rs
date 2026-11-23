@@ -620,6 +620,23 @@ fn node_overlay(
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             let accent = ui.visuals().selection.stroke.color;
             ui.painter().circle(p, 6.0, accent.gamma_multiply(0.5), egui::Stroke::new(1.5, accent));
+            // La guía: dónde quedaría (coordenadas, fecha…), junto al puntero.
+            if img.contains(p)
+                && let Some(hint) = r.drag_hint(content, id, local(p))
+            {
+                let font = egui::TextStyle::Small.resolve(ui.style());
+                let galley = ui.painter().layout_no_wrap(hint, font, ui.visuals().text_color());
+                let at = p + egui::vec2(12.0, -galley.size().y - 8.0);
+                let bg = egui::Rect::from_min_size(at, galley.size()).expand(4.0);
+                ui.painter().rect(
+                    bg,
+                    4.0,
+                    ui.visuals().window_fill,
+                    ui.visuals().window_stroke,
+                    egui::StrokeKind::Outside,
+                );
+                ui.painter().galley(at, galley, ui.visuals().text_color());
+            }
             if resp.drag_stopped() {
                 st.drag = None;
                 if img.contains(p) {

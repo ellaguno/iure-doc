@@ -269,6 +269,10 @@ impl DiagramRenderer for Renderers {
         self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.spot_label(block, id))
     }
 
+    fn drag_hint(&self, block: &str, id: usize, to: [f32; 2]) -> Option<String> {
+        self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.drag_hint(block, id, to))
+    }
+
     fn drag(&self, block: &str, id: usize, to: [f32; 2]) -> Option<String> {
         self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.drag(block, id, to))
     }

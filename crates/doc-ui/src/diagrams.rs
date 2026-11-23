@@ -30,6 +30,9 @@ pub enum ActionInput {
     Text { prompt: String, initial: String },
     /// Elegir una de estas opciones (sus nombres).
     Choice(Vec<String>),
+    /// Elegir una opción y luego escribir un texto en el globo («Agregar siguiente»: la forma y su
+    /// texto).
+    ChoiceText { options: Vec<String>, prompt: String },
     /// Pulsar otra zona del dibujo (`prompt` lo explica: «Elige el nodo de destino»).
     OtherSpot(String),
 }
@@ -61,6 +64,8 @@ pub enum ActionData {
     Text(String),
     /// El número de la opción elegida.
     Choice(usize),
+    /// La opción elegida y el texto.
+    ChoiceText(usize, String),
     /// La otra zona pulsada.
     Spot(usize),
 }

@@ -530,6 +530,8 @@ struct Overlay {
     sel: Option<crate::Target>,
     /// Una acción esperando su texto (el globo) y lo escrito.
     asking: Option<(crate::Target, crate::ActionDef)>,
+    /// La opción ya elegida de una acción que pide opción y texto.
+    choice: Option<usize>,
     text: String,
     focus_text: bool,
     /// Una acción esperando que se pulse otra zona.
@@ -663,7 +665,7 @@ fn node_overlay(
                     }
                     if let Some((at_t, a)) = st.asking.clone() {
                         // El globo del texto.
-                        if let ActionInput::Text { prompt, .. } = &a.input {
+                        if let ActionInput::Text { prompt, .. } | ActionInput::ChoiceText { prompt, .. } = &a.input {
                             ui.label(prompt.as_str());
                         }
                         ui.horizontal(|ui| {
@@ -673,7 +675,12 @@ fn node_overlay(
                             }
                             let enter = te.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                             if ui.button(pick("OK", "Aceptar")).clicked() || enter {
-                                act = do_apply(at_t, &a, ActionData::Text(std::mem::take(&mut st.text)));
+                                let text = std::mem::take(&mut st.text);
+                                let data = match st.choice.take() {
+                                    Some(c) => ActionData::ChoiceText(c, text),
+                                    None => ActionData::Text(text),
+                                };
+                                act = do_apply(at_t, &a, data);
                                 st.asking = None;
                             }
                         });
@@ -709,6 +716,7 @@ fn node_overlay(
                                 ActionInput::Text { initial, .. } => {
                                     if b.clicked() {
                                         st.text = initial.clone();
+                                        st.choice = None;
                                         st.focus_text = true;
                                         st.asking = Some((t, a.clone()));
                                     }
@@ -717,6 +725,19 @@ fn node_overlay(
                                     if b.clicked() {
                                         st.picking = Some((t, a.clone()));
                                     }
+                                }
+                                ActionInput::ChoiceText { options, .. } => {
+                                    egui::Popup::menu(&b).show(|ui| {
+                                        for (n, o) in options.iter().enumerate() {
+                                            if ui.button(o.as_str()).clicked() {
+                                                st.text.clear();
+                                                st.choice = Some(n);
+                                                st.focus_text = true;
+                                                st.asking = Some((t, a.clone()));
+                                                ui.close();
+                                            }
+                                        }
+                                    });
                                 }
                                 ActionInput::Choice(opts) => {
                                     egui::Popup::menu(&b).show(|ui| {

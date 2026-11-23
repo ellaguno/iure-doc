@@ -899,12 +899,23 @@ impl iure_doc_ui::DiagramRenderer for FakeQuad {
         }]
     }
     fn spot_actions(&self, _block: &str, _id: usize) -> Vec<iure_doc_ui::ActionDef> {
-        vec![iure_doc_ui::ActionDef {
-            id: 2,
-            icon: iurefficient_ui::icons::Icon::Hyperlink,
-            label: "Conectar con…".into(),
-            input: iure_doc_ui::ActionInput::OtherSpot("Elige el destino".into()),
-        }]
+        vec![
+            iure_doc_ui::ActionDef {
+                id: 2,
+                icon: iurefficient_ui::icons::Icon::Hyperlink,
+                label: "Conectar con…".into(),
+                input: iure_doc_ui::ActionInput::OtherSpot("Elige el destino".into()),
+            },
+            iure_doc_ui::ActionDef {
+                id: 3,
+                icon: iurefficient_ui::icons::Icon::Plus,
+                label: "Agregar siguiente".into(),
+                input: iure_doc_ui::ActionInput::ChoiceText {
+                    options: vec!["Rectángulo".into(), "Decisión".into()],
+                    prompt: "Texto".into(),
+                },
+            },
+        ]
     }
     fn apply(
         &self,
@@ -919,6 +930,9 @@ impl iure_doc_ui::DiagramRenderer for FakeQuad {
                 format!("{t} {:.0} {:.0}", x / 10.0, y / 10.0)
             }
             (iure_doc_ui::Target::Spot(a), 2, iure_doc_ui::ActionData::Spot(b)) => format!("{a} --> {b}"),
+            (iure_doc_ui::Target::Spot(a), 3, iure_doc_ui::ActionData::ChoiceText(k, t)) => {
+                format!("{a} siguiente {k} {t}")
+            }
             _ => return None,
         };
         Some((format!("{body}{line}\n```"), None))
@@ -984,6 +998,24 @@ fn an_action_can_ask_for_another_spot() {
     h.run_steps(2);
     click(&mut h, img.min + egui::vec2(160.0 * k, 20.0 * k));
     assert_eq!(h.state().text, "```cuad\n0 --> 1\n```\n");
+}
+
+/// «Agregar siguiente»: se elige la forma en un menú y luego se escribe el texto en el globo.
+#[test]
+fn an_action_can_ask_for_a_choice_and_then_a_text() {
+    let mut h = quad_harness();
+    let img = h.get_by_label("Diagrama 1").rect();
+    let k = img.width() / 200.0;
+    click(&mut h, img.min + egui::vec2(20.0 * k, 20.0 * k));
+    h.get_by_label("Agregar siguiente").click();
+    h.run_steps(3);
+    h.get_by_label("Decisión").click();
+    h.run_steps(3);
+    h.event(egui::Event::Text("Paso".into()));
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().text, "```cuad\n0 siguiente 1 Paso\n```\n");
 }
 
 /// Un punto arrastrable se mueve: al soltarlo, la app recibe dónde quedó.

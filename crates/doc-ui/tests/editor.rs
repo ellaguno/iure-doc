@@ -939,6 +939,9 @@ impl iure_doc_ui::DiagramRenderer for FakeQuad {
         };
         Some((format!("{body}{line}\n```"), None))
     }
+    fn spot_label(&self, _block: &str, id: usize) -> Option<String> {
+        ["Uno", "Dos", "Tres"].get(id).map(|s| s.to_string())
+    }
     fn drag(&self, block: &str, id: usize, to: [f32; 2]) -> Option<String> {
         let body = block.trim_end().strip_suffix("```")?;
         Some(format!("{body}mover {id} {:.0} {:.0}\n```", to[0] / 10.0, to[1] / 10.0))
@@ -1032,6 +1035,26 @@ fn the_bar_does_not_cover_the_neighbour() {
     let below =
         egui::Rect::from_min_max(img.min + egui::vec2(10.0 * k, 40.0 * k), img.min + egui::vec2(30.0 * k, 60.0 * k));
     assert!(!bar.intersects(below), "la barra {bar:?} tapa el nodo de abajo {below:?}");
+}
+
+/// Accesibilidad: cada zona tiene su nombre y se alcanza con el teclado; Intro lleva a su barra y,
+/// en «Conectar con…», Intro sobre otra zona la elige.
+#[test]
+fn zones_work_with_the_keyboard() {
+    let mut h = quad_harness();
+    h.get_by_label("Uno").focus();
+    h.run_steps(3);
+    assert!(h.query_by_label("Conectar con…").is_some(), "al enfocar la zona aparece su barra");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.get_by_label("Conectar con…").is_focused(), "Intro pasa a la barra");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    h.get_by_label("Dos").focus();
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().text, "```cuad\n0 --> 1\n```\n");
 }
 
 /// Un punto arrastrable se mueve: al soltarlo, la app recibe dónde quedó.

@@ -133,6 +133,11 @@ pub trait DiagramRenderer: Send + Sync {
     fn apply(&self, _block: &str, _target: Target, _action: u32, _data: ActionData) -> Option<(String, Option<usize>)> {
         None
     }
+    /// El nombre de la zona `id` (su texto: «Inicio», «A → B»…) para el lector de pantalla y el
+    /// teclado. Sin nombre se dice «Elemento N».
+    fn spot_label(&self, _block: &str, _id: usize) -> Option<String> {
+        None
+    }
     /// La zona arrastrable `id` se soltó en `to` (puntos desde la esquina del dibujo): el bloque
     /// nuevo.
     fn drag(&self, _block: &str, _id: usize, _to: [f32; 2]) -> Option<String> {

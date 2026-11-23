@@ -540,6 +540,8 @@ struct Overlay {
     drag: Option<usize>,
     /// Tamaño de la barra en el cuadro anterior (para colocarla sin tapar otras zonas).
     bar_size: Option<egui::Vec2>,
+    /// Intro sobre una zona enfocada: el foco pasa al primer botón de su barra.
+    focus_bar: bool,
 }
 
 /// Dónde va la barra de `sel` (en pantalla): el primer lugar —debajo, arriba, a la derecha, a la
@@ -659,6 +661,36 @@ fn node_overlay(
     if ui.input(|i| i.key_pressed(Key::Escape)) {
         st = Overlay::default();
     }
+    // Teclado y lector de pantalla: cada zona es un elemento enfocable (Tab) con su nombre; al
+    // enfocarla se elige (y aparece su barra); Intro pasa a los botones de la barra.
+    let pick_lang = iurefficient_ui::lang::pick;
+    for (n, s) in spots.iter().enumerate().take(500) {
+        let z = ui.interact(screen(s.rect), key.with(("zona", s.id)), egui::Sense::focusable_noninteractive());
+        let name =
+            r.spot_label(content, s.id).unwrap_or_else(|| format!("{} {}", pick_lang("Element", "Elemento"), n + 1));
+        z.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+        if z.has_focus() {
+            if st.picking.is_none() && st.sel != Some(Target::Spot(s.id)) {
+                st.sel = Some(Target::Spot(s.id));
+                st.asking = None;
+            }
+            if let Some((t, a)) = st.picking.clone()
+                && ui.input(|i| i.key_pressed(Key::Enter))
+            {
+                // «Conectar con…» con el teclado: Intro sobre la otra zona.
+                st.picking = None;
+                act = do_apply(t, &a, ActionData::Spot(s.id));
+            } else if ui.input(|i| i.key_pressed(Key::Enter)) {
+                st.focus_bar = true;
+            }
+            ui.painter().rect_stroke(
+                screen(s.rect).expand(5.0),
+                6.0,
+                egui::Stroke::new(1.0, ui.visuals().selection.stroke.color.gamma_multiply(0.6)),
+                egui::StrokeKind::Outside,
+            );
+        }
+    }
     // Lo elegido, marcado.
     let accent = ui.visuals().selection.stroke.color;
     let marked = match st.sel {
@@ -724,9 +756,12 @@ fn node_overlay(
                         if defs.is_empty() {
                             // Los mapas mentales (la barra de siempre).
                             let Target::Spot(id) = t else { return };
-                            if icon_button(ui, Icon::Indent, pick("Add child branch", "Añadir rama hija"), true)
-                                .clicked()
-                            {
+                            let child =
+                                icon_button(ui, Icon::Indent, pick("Add child branch", "Añadir rama hija"), true);
+                            if std::mem::take(&mut st.focus_bar) {
+                                child.request_focus();
+                            }
+                            if child.clicked() {
                                 act = Some(OverlayAct::Node(id, NodeAction::AddChild));
                             }
                             if icon_button(ui, Icon::Plus, pick("Add sibling branch", "Añadir rama hermana"), true)
@@ -739,8 +774,11 @@ fn node_overlay(
                             }
                             return;
                         }
-                        for a in &defs {
+                        for (k, a) in defs.iter().enumerate() {
                             let b = icon_button(ui, a.icon, &a.label, true);
+                            if k == 0 && std::mem::take(&mut st.focus_bar) {
+                                b.request_focus();
+                            }
                             match &a.input {
                                 ActionInput::None => {
                                     if b.clicked() {

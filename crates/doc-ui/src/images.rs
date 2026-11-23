@@ -265,6 +265,10 @@ impl DiagramRenderer for Renderers {
         self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.apply(block, target, action, data))
     }
 
+    fn spot_label(&self, block: &str, id: usize) -> Option<String> {
+        self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.spot_label(block, id))
+    }
+
     fn drag(&self, block: &str, id: usize, to: [f32; 2]) -> Option<String> {
         self.0.iter().find(|r| r.accepts(block)).and_then(|r| r.drag(block, id, to))
     }

@@ -1357,7 +1357,28 @@ fn page_down_and_up_move_by_a_screen() {
     h.run_steps(3);
     let after = h.ctx.memory(|m| m.focused());
     assert_ne!(first, after, "Av Pág cambió de bloque");
+
     h.key_press(Key::PageUp);
     h.run_steps(3);
     assert_eq!(h.ctx.memory(|m| m.focused()), first, "Re Pág volvió arriba");
+}
+
+/// Regresión (dueño 2026-11-23): en un bloque largo (una lista de muchos elementos), Av Pág movía
+/// el cursor pero la vista no lo seguía. Ahora el documento se desplaza una pantalla.
+#[test]
+fn page_down_inside_a_long_block_scrolls_the_view() {
+    let doc: String = (1..=150).map(|n| format!("- elemento {n}\n")).collect();
+    let mut h = blocks_harness(&doc);
+    block_cursor_at(&mut h, 0);
+    let id = h.ctx.memory(|m| m.focused()).unwrap();
+    let top = |h: &Harness<'static, State>| h.ctx.read_response(id).map(|r| r.rect.top()).unwrap();
+    let before = top(&h);
+    h.key_press(Key::PageDown);
+    h.run_steps(4);
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(id), "el mismo bloque");
+    let after = top(&h);
+    assert!(after < before - 100.0, "la vista no bajó: {before} → {after}");
+    h.key_press(Key::PageUp);
+    h.run_steps(4);
+    assert!((top(&h) - before).abs() < 2.0, "Re Pág la regresa");
 }

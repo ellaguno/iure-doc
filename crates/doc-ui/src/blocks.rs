@@ -475,6 +475,9 @@ fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
     });
     if dir != 0.0 {
         let page = (ui.clip_rect().height() * 0.9).max(80.0);
+        // Regresión (dueño 2026-11-23): el cursor cambiaba de página pero la vista no; ahora el
+        // documento se desplaza una pantalla con él.
+        ui.scroll_with_delta(egui::vec2(0.0, -dir * page));
         let g = cached_galley(ui, fid);
         let (caret, block_h) = g
             .as_ref()

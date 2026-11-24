@@ -566,7 +566,102 @@ fn blocks_of(nodes: &[Node], depth: usize) -> Vec<Block> {
         }
     }
     c.flush();
-    c.blocks
+    merge_list_runs(c.blocks)
+}
+
+/// Una lista «envoltorio»: un solo elemento sin texto cuyo único bloque es otra lista. Así marcan
+/// LibreOffice y Word el nivel de un tramo de lista (`<ol><ol><li>…`). Devuelve cuántos niveles
+/// envuelve y la lista de adentro.
+fn unwrap_levels(b: Block) -> (usize, Block) {
+    let mut depth = 0;
+    let mut b = b;
+    loop {
+        let inner = match &b {
+            Block::List { items, .. } if items.len() == 1 => {
+                matches!(items.first().map(|i| i.blocks.as_slice()), Some([Block::List { .. }]))
+            }
+            _ => false,
+        };
+        if !inner || depth >= MAX_STACK {
+            return (depth, b);
+        }
+        let Block::List { mut items, .. } = b else { return (depth, b) };
+        let Some(Item { blocks, .. }) = items.pop() else {
+            return (depth, Block::List { ordered: false, start: 1, tight: true, items: Vec::new() });
+        };
+        let Some(next) = blocks.into_iter().next() else {
+            return (depth, Block::List { ordered: false, start: 1, tight: true, items: Vec::new() });
+        };
+        b = next;
+        depth += 1;
+    }
+}
+
+/// Cuelga los elementos de `run` (una lista) `depth` niveles debajo de `root`: en la lista del
+/// último elemento de cada nivel (la crea si no hay). Devuelve la lista si no se pudo colgar.
+fn attach(root: &mut Block, depth: usize, run: Block) -> Option<Block> {
+    let Block::List { items, ordered, .. } = root else { return Some(run) };
+    if depth == 0 {
+        match run {
+            Block::List { ordered: o, items: more, .. } if o == *ordered => {
+                items.extend(more);
+                return None;
+            }
+            other => return Some(other),
+        }
+    }
+    let last = items.last_mut()?;
+    match last.blocks.last_mut() {
+        Some(sub @ Block::List { .. }) => attach(sub, depth - 1, run),
+        _ if depth == 1 => {
+            last.blocks.push(run);
+            None
+        }
+        _ => {
+            // Falta un nivel intermedio: se cuelga donde se pueda.
+            last.blocks.push(run);
+            None
+        }
+    }
+}
+
+/// LibreOffice y Word (al copiar) parten una lista con niveles en tramos seguidos: cada tramo es un
+/// `<ol>` aparte con su nivel marcado por listas envoltorio. Se juntan en una sola lista con sus
+/// niveles, para que la estructura y la numeración (que sigue de un tramo al otro) sean las del
+/// documento. También se continúa una lista numerada que sigue con `start` (`<ol start="2">`).
+fn merge_list_runs(blocks: Vec<Block>) -> Vec<Block> {
+    let mut out: Vec<Block> = Vec::with_capacity(blocks.len());
+    for b in blocks {
+        let continues = match (out.last(), &b) {
+            (Some(Block::List { ordered: true, items, .. }), Block::List { ordered: true, start, .. }) => {
+                *start > 1 && *start == items.len() as u64 + 1
+            }
+            _ => false,
+        };
+        let (depth, inner) = unwrap_levels(b);
+        let can_attach = matches!(out.last(), Some(Block::List { .. }))
+            && matches!(inner, Block::List { .. })
+            && (depth > 0 || continues);
+        if can_attach && let Some(root) = out.last_mut() {
+            if let Some(rest) = attach(root, depth, inner) {
+                out.push(rest);
+            }
+            continue;
+        }
+        // Un tramo envoltorio sin lista antes: se queda con sus niveles (no se pierde nada).
+        out.push(if depth > 0 { rewrap(depth, inner) } else { inner });
+    }
+    out
+}
+
+/// Vuelve a envolver una lista `depth` niveles (la forma original).
+fn rewrap(depth: usize, inner: Block) -> Block {
+    let mut b = inner;
+    for _ in 0..depth {
+        let ordered = matches!(b, Block::List { ordered: true, .. });
+        b = Block::List { ordered, start: 1, tight: true, items: vec![Item { checked: None, blocks: vec![b] }] };
+    }
+    b
 }
 
 /// Un párrafo (de una lista de Word) como bloques de elemento.
@@ -799,6 +894,23 @@ pub fn to_markdown(html: &str) -> String {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// Regresión (dueño 2026-11-23): pegar una lista con niveles copiada de LibreOffice o Word. Cada
+    /// tramo llega como un `<ol>` aparte, con su nivel marcado por `<ol>` dentro de `<ol>` sin `<li>`;
+    /// salían viñetas vacías («1)», «1.») y la numeración empezaba de nuevo en cada tramo.
+    #[test]
+    fn libreoffice_list_runs_keep_their_levels_and_numbering() {
+        let html = "<body><ol><li><p>Iurefficient</p></li></ol>\
+            <ol><ol><li><p>App</p></li><li><p>Portal</p></li></ol></ol>\
+            <ol><ol><ol><li><p>Tema</p></li></ol></ol></ol>\
+            <ol><ol><li><p>Blog</p></li></ol></ol>\
+            <ol start=\"2\"><li><p>Conversaciones</p></li></ol>\
+            <ol><ol><li><p>Pláticas</p></li></ol></ol></body>";
+        assert_eq!(
+            to_markdown(html),
+            "1. Iurefficient\n   1. App\n   2. Portal\n      1. Tema\n   3. Blog\n2. Conversaciones\n   1. Pláticas"
+        );
+    }
 
     #[test]
     fn web_structure_becomes_markdown() {

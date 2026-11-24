@@ -1297,3 +1297,67 @@ fn read_only_shows_the_same_and_does_not_change() {
     h.run_steps(3);
     assert_eq!(h.state().text, "# Título\n\nUno\nDos\n");
 }
+
+// --- Regresiones del dueño (2026-11-23, IureEditor 2.0) ---
+
+/// Elige `a..b` (caracteres) en el bloque con el foco.
+fn block_select(h: &mut Harness<'static, State>, a: usize, b: usize) {
+    block_cursor_at(h, a);
+    let ctx = h.ctx.clone();
+    let Some(id) = ctx.memory(|m| m.focused()) else { panic!("sin foco") };
+    let mut st = TextEditState::load(&ctx, id).unwrap_or_default();
+    st.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(a), CCursor::new(b))));
+    st.store(&ctx, id);
+    h.run();
+}
+
+/// Tab con varias líneas elegidas de una lista numerada: todas se meten bajo el número de arriba
+/// y la numeración se rehace (la sublista empieza en 1, la de afuera sigue).
+#[test]
+fn tab_on_several_numbered_lines_indents_and_renumbers() {
+    let mut h = blocks_harness("1. uno\n2. dos\n3. tres\n4. cuatro\n");
+    block_select(&mut h, 8, 20);
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().text, "1. uno\n   1. dos\n   2. tres\n2. cuatro\n");
+}
+
+/// Borrar un elemento de una lista numerada la renumera.
+#[test]
+fn deleting_an_item_renumbers_the_list() {
+    let mut h = blocks_harness("1. uno\n2. dos\n3. tres\n");
+    // «2. dos\n» entera, y Retroceso.
+    block_select(&mut h, 7, 14);
+    h.key_press(Key::Backspace);
+    h.run_steps(3);
+    assert_eq!(h.state().text, "1. uno\n2. tres\n");
+}
+
+/// Pegar una lista con sangrías dentro de un mapa mental: cada línea es un nodo (con su `> `).
+#[test]
+fn pasting_a_list_into_a_mind_map_keeps_every_node() {
+    let doc = "> [!MINDMAP|list] Proyectos\n> - \n";
+    let mut h = blocks_harness(doc);
+    // El cursor al final de «> - ».
+    block_cursor_at(&mut h, "> [!MINDMAP|list] Proyectos\n> - ".chars().count());
+    h.event(egui::Event::Paste("- Iurefficient\n  - App\n- Salud".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().text, "> [!MINDMAP|list] Proyectos\n> - Iurefficient\n>   - App\n> - Salud\n");
+}
+
+/// Re Pág / Av Pág: en un documento largo, Av Pág lleva el cursor una pantalla abajo (otro bloque)
+/// y Re Pág lo regresa.
+#[test]
+fn page_down_and_up_move_by_a_screen() {
+    let doc: String = (1..=80).map(|n| format!("Párrafo {n}\n\n")).collect();
+    let mut h = blocks_harness(&doc);
+    block_cursor_at(&mut h, 0);
+    let first = h.ctx.memory(|m| m.focused());
+    h.key_press(Key::PageDown);
+    h.run_steps(3);
+    let after = h.ctx.memory(|m| m.focused());
+    assert_ne!(first, after, "Av Pág cambió de bloque");
+    h.key_press(Key::PageUp);
+    h.run_steps(3);
+    assert_eq!(h.ctx.memory(|m| m.focused()), first, "Re Pág volvió arriba");
+}

@@ -352,22 +352,221 @@ pub fn indent(text: &str, cursor: usize, outdent: bool) -> Option<Edit> {
     if p.marker == "> " {
         return None;
     }
-    let mut out = String::with_capacity(text.len() + 2);
+    let (add, remove) = indent_amounts(text, start, &p);
+    let mut out = String::with_capacity(text.len() + 8);
     out.push_str(text.get(..start)?);
     let delta: isize = if outdent {
-        let remove = p.indent.len().min(2);
+        let remove = p.indent.len().min(remove);
         if remove == 0 {
             return None;
         }
         out.push_str(line.get(remove..)?);
         -(remove as isize)
     } else {
-        out.push_str("  ");
+        out.push_str(&" ".repeat(add));
         out.push_str(line);
-        2
+        add as isize
     };
     out.push_str(text.get(end..)?);
     let c = cursor.saturating_add_signed(delta).max(char_of(text, start));
+    Some(Edit { text: out, sel_start: c, sel_end: c })
+}
+
+/// Cuánto sangrar y cuánto quitar a la línea que empieza en `start` (con prefijo `p`): para meterla
+/// bajo el elemento de arriba hace falta el ancho de su marca (`1. ` son 3, `10. ` 4, `- ` 2; si no,
+/// Markdown no la toma como subnivel de una lista numerada); para sacarla, volver a la sangría de su
+/// padre.
+fn indent_amounts(text: &str, start: usize, p: &Prefix) -> (usize, usize) {
+    let mine = p.indent.len();
+    let above: Vec<Prefix> = text
+        .get(..start)
+        .unwrap_or("")
+        .lines()
+        .rev()
+        .take(500)
+        .filter_map(prefix)
+        .filter(|q| q.marker != "> ")
+        .collect();
+    // El hermano de arriba (misma sangría): su marca da cuánto meterse.
+    let add = above
+        .iter()
+        .take_while(|q| q.indent.len() >= mine)
+        .find(|q| q.indent.len() == mine)
+        .map_or(2, |q| q.marker.len());
+    // El padre (menos sangría): volver a su sangría.
+    let remove = above.iter().find(|q| q.indent.len() < mine).map_or(mine.min(2), |q| mine - q.indent.len());
+    (add, remove)
+}
+
+/// Tab / Mayús+Tab con varias líneas elegidas: sangra (o quita sangría a) cada elemento de lista de
+/// la selección. Con una sola línea, como [`indent`]. Deja elegidas las líneas completas.
+pub fn indent_lines(text: &str, sel_start: usize, sel_end: usize, outdent: bool) -> Option<Edit> {
+    let (a, b) = (sel_start.min(sel_end), sel_start.max(sel_end));
+    let (ab, bb) = (byte_of(text, a), byte_of(text, b));
+    let (first, _) = line_at(text, ab);
+    // Una selección que acaba justo al principio de una línea no la incluye.
+    let last_at = if bb > ab && text.get(..bb).is_some_and(|t| t.ends_with('\n')) { bb - 1 } else { bb };
+    let (_, last_end) = line_at(text, last_at);
+    if !text.get(first..last_end).is_some_and(|t| t.contains('\n')) {
+        return indent(text, sel_start, outdent);
+    }
+    // Las líneas, de abajo arriba (así no se mueven las de arriba).
+    let mut starts: Vec<usize> = vec![first];
+    starts.extend(text.get(first..last_end)?.match_indices('\n').map(|(i, _)| first + i + 1).take(5_000));
+    let mut out = text.to_string();
+    let mut changed = false;
+    for s in starts.into_iter().rev() {
+        let c = char_of(&out, s);
+        if let Some(e) = indent(&out, c, outdent) {
+            out = e.text;
+            changed = true;
+        }
+    }
+    if !changed {
+        return None;
+    }
+    let delta = out.chars().count() as isize - text.chars().count() as isize;
+    let end = char_of(text, last_end).saturating_add_signed(delta);
+    Some(Edit { text: out, sel_start: char_of(text, first), sel_end: end })
+}
+
+/// Vuelve a numerar las listas numeradas (`1.`, `2.`… por nivel; cada lista conserva su primer
+/// número; las sublistas empiezan en 1) tras agregar, quitar o mover elementos. `None` si ya estaban bien. Devuelve también,
+/// por línea, cuántos caracteres cambió (para mover el cursor).
+pub fn renumber(text: &str) -> Option<(String, Vec<(usize, isize)>)> {
+    // Pila de listas abiertas: (sangría, número siguiente; `None` = viñetas).
+    let mut stack: Vec<(usize, Option<u64>)> = Vec::new();
+    let mut out = String::with_capacity(text.len());
+    let mut deltas: Vec<(usize, isize)> = Vec::new();
+    let mut fence: Option<String> = None;
+    let mut line_char = 0usize;
+    let mut changed = false;
+    for (n, raw) in text.split_inclusive('\n').enumerate() {
+        let line = raw.trim_end_matches(['\n', '\r']);
+        let nl = raw.get(line.len()..).unwrap_or("");
+        let t = line.trim_start();
+        let mut new_line: Option<String> = None;
+        if let Some(f) = &fence {
+            if t.starts_with(f.as_str()) {
+                fence = None;
+            }
+        } else if t.starts_with("```") || t.starts_with("~~~") {
+            fence = Some(t.chars().take_while(|c| *c == '`' || *c == '~').collect());
+        } else if t.is_empty() {
+            // Una línea en blanco no corta la lista (lista «suelta»).
+        } else if let Some(p) = prefix(line).filter(|p| p.marker != "> ") {
+            let ind = p.indent.len();
+            while stack.last().is_some_and(|(i, _)| *i > ind) {
+                stack.pop();
+            }
+            match (stack.last_mut(), p.number) {
+                (Some((i, Some(next))), Some(num)) if *i == ind => {
+                    if num != *next {
+                        let delim = p.marker.get(p.marker.len().saturating_sub(2)..).unwrap_or(". ");
+                        let rest = line.get(p.indent.len() + p.marker.len()..).unwrap_or("");
+                        new_line = Some(format!("{}{}{delim}{rest}", p.indent, *next));
+                    }
+                    *next = next.saturating_add(1);
+                }
+                (Some((i, kind)), _) if *i == ind => {
+                    // Cambia de numerada a viñetas (o al revés): otra lista.
+                    *kind = p.number.map(|x| x.saturating_add(1));
+                }
+                _ => {
+                    // Una sublista numerada empieza en 1 (como en Word); una lista de primer nivel
+                    // conserva su primer número.
+                    let first = match p.number {
+                        Some(num) if !stack.is_empty() && num != 1 => {
+                            let delim = p.marker.get(p.marker.len().saturating_sub(2)..).unwrap_or(". ");
+                            let rest = line.get(p.indent.len() + p.marker.len()..).unwrap_or("");
+                            new_line = Some(format!("{}1{delim}{rest}", p.indent));
+                            Some(1)
+                        }
+                        other => other,
+                    };
+                    stack.push((ind, first.map(|x| x.saturating_add(1))));
+                }
+            }
+        } else if line.starts_with(' ') {
+            // Continuación de un elemento.
+        } else {
+            stack.clear();
+        }
+        match new_line {
+            Some(l) => {
+                let d = l.chars().count() as isize - line.chars().count() as isize;
+                deltas.push((line_char, d));
+                out.push_str(&l);
+                changed = true;
+            }
+            None => out.push_str(line),
+        }
+        out.push_str(nl);
+        line_char += raw.chars().count();
+        if n > 20_000 {
+            out.push_str(text.get(out.len()..).unwrap_or(""));
+            break;
+        }
+    }
+    changed.then_some((out, deltas))
+}
+
+/// Mueve una posición (en caracteres) según los cambios de [`renumber`].
+pub fn renumber_shift(pos: usize, deltas: &[(usize, isize)]) -> usize {
+    let mut p = pos as isize;
+    for (line_start, d) in deltas {
+        // El cambio está en la marca, al principio de la línea: mueve lo que va después.
+        if (*line_start as isize) < pos as isize {
+            p += d;
+        }
+    }
+    p.max(0) as usize
+}
+
+/// Pegar varias líneas dentro de una cita (`> `, como un mapa mental o un aviso): cada línea
+/// pegada lleva las marcas de cita de la línea del cursor, con su sangría. Si el cursor está en un
+/// elemento vacío (`> - `) y lo pegado ya trae su viñeta, no se repite. `None` fuera de una cita o
+/// si lo pegado es una sola línea (eso lo hace el campo).
+pub fn paste_in_quote(text: &str, sel_start: usize, sel_end: usize, pasted: &str) -> Option<Edit> {
+    let (a, b) = (sel_start.min(sel_end), sel_start.max(sel_end));
+    let (ab, bb) = (byte_of(text, a), byte_of(text, b));
+    if in_fence(text, ab) || !pasted.contains('\n') {
+        return None;
+    }
+    let (start, _) = line_at(text, ab);
+    let line = text.get(start..)?.lines().next().unwrap_or("");
+    let q = quote_lead(line);
+    if q == 0 {
+        return None;
+    }
+    let lead = line.get(..q)?;
+    let pasted = pasted.replace("\r\n", "\n");
+    let lines: Vec<&str> = pasted.trim_end_matches('\n').split('\n').take(10_000).collect();
+    // Lo que hay entre la cita y el cursor: si es solo una viñeta vacía y lo pegado trae la suya,
+    // se quita la de la línea.
+    let typed = text.get(start + q..ab).unwrap_or("");
+    let first_has_marker = lines.first().and_then(|l| prefix(l)).is_some_and(|p| p.marker != "> ");
+    let empty_item = typed.trim().is_empty() || prefix(typed).is_some_and(|p| p.marker != "> " && typed.len() == p.len);
+    let cut = if empty_item && first_has_marker { start + q } else { ab };
+    let mut ins = String::with_capacity(pasted.len() + lines.len() * lead.len());
+    for (k, l) in lines.iter().enumerate() {
+        if k > 0 {
+            ins.push('\n');
+            ins.push_str(lead);
+        }
+        // Lo pegado que ya venía citado (copiado de otra cita) no se cita dos veces.
+        let l = if k > 0 {
+            l.strip_prefix(lead)
+                .or_else(|| l.strip_prefix('>').map(str::trim_start))
+                .filter(|_| l.starts_with('>'))
+                .unwrap_or(l)
+        } else {
+            l
+        };
+        ins.push_str(l);
+    }
+    let out = format!("{}{ins}{}", text.get(..cut)?, text.get(bb..)?);
+    let c = char_of(text, cut) + ins.chars().count();
     Some(Edit { text: out, sel_start: c, sel_end: c })
 }
 
@@ -476,6 +675,63 @@ pub fn link(text: &str, sel_start: usize, sel_end: usize) -> Edit {
 
 #[cfg(test)]
 mod tests {
+
+    /// Regresión (dueño 2026-11-23): con varias líneas elegidas, Tab sangra todas; en una lista
+    /// numerada se mete bajo el número de arriba (3 espacios para `1. `), y Mayús+Tab vuelve.
+    #[test]
+    fn tab_indents_every_selected_line_under_its_number() {
+        use super::{indent_lines, renumber};
+        let t = "1. uno\n2. dos\n3. tres\n4. cuatro";
+        // Elegidas «dos» y «tres».
+        let e = indent_lines(t, 8, 20, false).unwrap();
+        assert_eq!(e.text, "1. uno\n   2. dos\n   3. tres\n4. cuatro");
+        let (r, _) = renumber(&e.text).unwrap();
+        assert_eq!(r, "1. uno\n   1. dos\n   2. tres\n2. cuatro");
+        let back = indent_lines(&r, e.sel_start, e.sel_end, true).unwrap();
+        let (r, _) = renumber(&back.text).unwrap();
+        assert_eq!(r, "1. uno\n2. dos\n3. tres\n4. cuatro");
+        // Con una sola línea, como siempre; con viñetas, 2 espacios.
+        assert_eq!(indent_lines("- a\n- b", 5, 5, false).unwrap().text, "- a\n  - b");
+    }
+
+    /// Regresión (dueño 2026-11-23): agregar o borrar elementos de una lista numerada la renumera,
+    /// por nivel; el primer número de cada lista se respeta; el cursor sigue en su lugar.
+    /// Regresión (dueño 2026-11-23): pegar una lista con sangrías dentro de un mapa mental ponía
+    /// todo en un solo nodo. Cada línea va con su `> ` y su sangría.
+    #[test]
+    fn pasting_lines_into_a_quote_quotes_each_one() {
+        use super::paste_in_quote;
+        let t = "> [!MINDMAP] Proyectos\n> - ";
+        let c = t.chars().count();
+        let e = paste_in_quote(t, c, c, "- Iurefficient\n  - App\n  - Portal\n- Salud\n").unwrap();
+        assert_eq!(e.text, "> [!MINDMAP] Proyectos\n> - Iurefficient\n>   - App\n>   - Portal\n> - Salud");
+        assert_eq!(e.sel_end, e.text.chars().count());
+        // Texto simple: cada línea citada, sin quitar lo escrito.
+        let e = paste_in_quote("> Nota: ", 8, 8, "uno\ndos").unwrap();
+        assert_eq!(e.text, "> Nota: uno\n> dos");
+        assert!(paste_in_quote("fuera", 5, 5, "a\nb").is_none());
+        assert!(paste_in_quote("> una", 5, 5, "sola").is_none());
+    }
+
+    #[test]
+    fn numbered_lists_are_renumbered() {
+        use super::{renumber, renumber_shift};
+        assert!(renumber("1. a\n2. b\n   1. c\n3. d").is_none(), "ya bien");
+        let (r, d) = renumber("1. a\n1. b\n1. c").unwrap();
+        assert_eq!(r, "1. a\n2. b\n3. c");
+        assert_eq!(renumber_shift(10, &d), 10, "el ancho no cambió");
+        // Borrar el 2: el 3 pasa a 2 y el 10 a 9 (el cursor retrocede un carácter).
+        let (r, d) = renumber("1. a\n3. c\n4. d\n5. e\n6. f\n7. g\n8. h\n9. i\n10. j").unwrap();
+        assert!(r.ends_with("\n9. j"), "{r}");
+        let end = "1. a\n3. c\n4. d\n5. e\n6. f\n7. g\n8. h\n9. i\n10. j".chars().count();
+        assert_eq!(renumber_shift(end, &d), r.chars().count());
+        // Una lista que empieza en 5 sigue en 5; un párrafo corta la lista; el código no se toca.
+        assert_eq!(renumber("5. a\n5. b").unwrap().0, "5. a\n6. b");
+        assert!(renumber("1. a\n\nTexto\n\n1. b").is_none());
+        assert!(renumber("```\n1. a\n1. b\n```").is_none());
+        // Con `)` y en sublistas.
+        assert_eq!(renumber("1) a\n   1) x\n   5) y\n1) b").unwrap().0, "1) a\n   1) x\n   2) y\n2) b");
+    }
 
     #[test]
     fn paint_wraps_changes_and_removes() {

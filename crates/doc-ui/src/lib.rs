@@ -966,14 +966,15 @@ fn editor_key(ui: &Ui, text: &str, sel: (usize, usize)) -> Option<Edit> {
                 return edit::set_line_kind(text, a, b, edit::LineKind::Heading(level));
             }
         }
-        // Mayús+Tab primero: `consume_key` sin modificadores también acepta Mayús.
-        if let Some(e) = edit::indent(text, cursor, true)
+        // Mayús+Tab primero: `consume_key` sin modificadores también acepta Mayús. Con varias
+        // líneas elegidas, todas.
+        if let Some(e) = edit::indent_lines(text, a, b, true)
             && i.consume_key(Modifiers::SHIFT, Key::Tab)
         {
             return Some(e);
         }
         if !i.modifiers.shift
-            && let Some(e) = edit::indent(text, cursor, false)
+            && let Some(e) = edit::indent_lines(text, a, b, false)
             && i.consume_key(Modifiers::NONE, Key::Tab)
         {
             return Some(e);
@@ -1035,6 +1036,40 @@ pub(crate) fn field(
         *text = t;
         state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(c))));
         state.store(ui.ctx(), id);
+        changed = true;
+    }
+    // Pegar varias líneas dentro de una cita (un mapa mental, un aviso): cada línea con su `> `.
+    if ui.memory(|m| m.has_focus(id))
+        && let Some(mut state) = TextEditState::load(ui.ctx(), id)
+        && let Some(range) = state.cursor.char_range()
+        && let Some(pasted) = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Paste(t) if t.contains('\n') => Some(t.clone()),
+                _ => None,
+            })
+        })
+        && let Some(e) = edit::paste_in_quote(text, range.primary.index.0, range.secondary.index.0, &pasted)
+    {
+        ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Paste(_))));
+        *text = e.text;
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(e.sel_end))));
+        state.store(ui.ctx(), id);
+        changed = true;
+    }
+    // Las listas numeradas, siempre en orden (al agregar, borrar o mover elementos).
+    if ui.memory(|m| m.has_focus(id))
+        && text.contains(['.', ')'])
+        && let Some((t, deltas)) = edit::renumber(text)
+    {
+        *text = t;
+        if let Some(mut state) = TextEditState::load(ui.ctx(), id)
+            && let Some(r) = state.cursor.char_range()
+        {
+            let p = edit::renumber_shift(r.primary.index.0, &deltas);
+            let q = edit::renumber_shift(r.secondary.index.0, &deltas);
+            state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(q), CCursor::new(p))));
+            state.store(ui.ctx(), id);
+        }
         changed = true;
     }
     if ui.memory(|m| m.has_focus(id))

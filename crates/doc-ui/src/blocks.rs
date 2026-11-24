@@ -462,6 +462,49 @@ fn block_key(ui: &Ui, fid: Id, blocks: &Blocks, i: usize) -> Option<Act> {
     let (first_row, last_row) = row.unwrap_or((true, true));
     let prev = i.checked_sub(1).and_then(|j| blocks.chunks.get(j));
     let next = blocks.chunks.get(i + 1);
+    // Re Pág / Av Pág: una pantalla arriba o abajo; dentro del bloque si es largo, y si no, al
+    // bloque que quede ahí (por la altura de cada uno).
+    let dir = ui.input_mut(|x| {
+        if x.consume_key(egui::Modifiers::NONE, Key::PageDown) {
+            1.0
+        } else if x.consume_key(egui::Modifiers::NONE, Key::PageUp) {
+            -1.0
+        } else {
+            0.0
+        }
+    });
+    if dir != 0.0 {
+        let page = (ui.clip_rect().height() * 0.9).max(80.0);
+        let g = cached_galley(ui, fid);
+        let (caret, block_h) = g
+            .as_ref()
+            .map_or((0.0, c.height), |g| (g.pos_from_cursor(CCursor::new(p)).center().y, g.rect.height().max(1.0)));
+        let target = caret + dir * page;
+        if let Some(g) = &g
+            && (0.0..=block_h).contains(&target)
+        {
+            let x = g.pos_from_cursor(CCursor::new(p)).center().x;
+            let to = g.cursor_from_pos(egui::vec2(x, target)).index.0;
+            return Some(Act::Focus((c.uid, to)));
+        }
+        // Fuera del bloque: lo que falta, en los bloques de abajo (o de arriba).
+        let mut rest = if dir > 0.0 { target - block_h } else { -target };
+        let order: Vec<usize> = if dir > 0.0 { (i + 1..blocks.chunks.len()).collect() } else { (0..i).rev().collect() };
+        let mut land = None;
+        for j in order {
+            let Some(ch) = blocks.chunks.get(j) else { break };
+            land = Some(ch);
+            if rest <= ch.height.max(1.0) {
+                break;
+            }
+            rest -= ch.height.max(1.0);
+        }
+        return match land {
+            Some(ch) => Some(Act::Focus((ch.uid, 0))),
+            // Ya en el primero o el último: al principio o al final del bloque.
+            None => Some(Act::Focus((c.uid, if dir > 0.0 { len } else { 0 }))),
+        };
+    }
     // Mayús+flecha en el borde del bloque: la selección sigue en el bloque de al lado.
     let shift_only = ui.input(|x| x.modifiers.shift && !x.modifiers.command && !x.modifiers.alt && !x.modifiers.ctrl);
     if shift_only {

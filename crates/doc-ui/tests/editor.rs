@@ -1382,3 +1382,40 @@ fn page_down_inside_a_long_block_scrolls_the_view() {
     h.run_steps(4);
     assert!((top(&h) - before).abs() < 2.0, "Re Pág la regresa");
 }
+
+/// Solo para leer, un clic simple en un enlace lo abre (la app lo recibe); al editar hace falta
+/// Ctrl (un clic simple pone el cursor). Lo pidió el dueño de IureDesk (2026-11-27): en la vista de
+/// una nota o de una cita las ligas «no abrían nada».
+#[test]
+fn read_only_click_follows_links() {
+    for read_only in [true, false] {
+        let mut h = Harness::builder().with_size(egui::vec2(600.0, 300.0)).build_ui_state(
+            move |ui, st: &mut LinkState| {
+                let hooks = iure_doc_ui::Hooks { read_only, ..Default::default() };
+                let out = iure_doc_ui::show_blocks_hooks(ui, Id::unique("ligas"), &mut st.text, "", hooks);
+                if let Some(l) = out.link {
+                    st.link = Some(l);
+                }
+            },
+            LinkState {
+                text: "[Abrir la grabación](iuretranscribe://open?path=%2Fa.wav) hoy\n\notro\n".into(),
+                link: None,
+            },
+        );
+        h.run();
+        let r = h.get_all_by_role(egui::accesskit::Role::MultilineTextInput).next().map(|n| n.rect()).unwrap();
+        let p = egui::pos2(r.left() + 40.0, r.center().y);
+        h.event(egui::Event::PointerMoved(p));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+        }
+        h.run_steps(3);
+        let want = read_only.then_some("iuretranscribe://open?path=%2Fa.wav");
+        assert_eq!(h.state().link.as_deref(), want, "solo lectura: {read_only}");
+    }
+}

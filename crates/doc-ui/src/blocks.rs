@@ -1396,7 +1396,19 @@ pub fn show_hooks(ui: &mut Ui, id: Id, text: &mut String, hint: &str, hooks: Hoo
         // Sobre una copia: si algo la cambiara (un clic en un dibujo), el texto queda igual. Lo único
         // que sí se acepta es marcar o desmarcar una tarea (`[ ]` ↔ `[x]`).
         let mut copy = text.clone();
+        // Un clic simple sigue los enlaces (ver `crate::read_only_slot`); se restaura después por si
+        // este editor está dentro de otro.
+        let before = ui.data(|d| d.get_temp::<bool>(crate::read_only_slot()));
+        ui.data_mut(|d| d.insert_temp(crate::read_only_slot(), true));
         let mut out = show_hooks(ui, id, &mut copy, hint, Hooks { read_only: false, ..hooks });
+        ui.data_mut(|d| match before {
+            Some(b) => {
+                d.insert_temp(crate::read_only_slot(), b);
+            }
+            None => {
+                d.remove::<bool>(crate::read_only_slot());
+            }
+        });
         out.changed = is_task_toggle(text, &copy);
         if out.changed {
             *text = copy;

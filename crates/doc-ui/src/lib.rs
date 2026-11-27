@@ -909,6 +909,17 @@ pub(crate) fn link_slot() -> Id {
     Id::unique("iure-doc-link-clicked")
 }
 
+/// Marca, mientras se dibuja un editor de solo lectura, que un clic simple sigue un enlace (al
+/// editar hace falta Ctrl, para poder poner el cursor dentro del enlace).
+pub(crate) fn read_only_slot() -> Id {
+    Id::unique("iure-doc-read-only")
+}
+
+/// ¿Se está dibujando un editor de solo lectura?
+fn reading(ui: &Ui) -> bool {
+    ui.data(|d| d.get_temp::<bool>(read_only_slot())).unwrap_or(false)
+}
+
 /// El enlace pulsado en este cuadro (y se olvida).
 pub(crate) fn take_link(ui: &Ui) -> Option<String> {
     ui.data_mut(|d| d.remove_temp::<String>(link_slot()))
@@ -1200,9 +1211,20 @@ pub(crate) fn field(
     if let Some(sp) = spell {
         changed |= spell_menu(ui, id, text, sp, &out);
     }
-    // Ctrl+clic en un enlace: lo abre la app.
+    // Ctrl+clic en un enlace (o un clic simple, si es solo para leer): lo abre la app.
+    let reading = reading(ui);
+    if (reading || ui.input(|i| i.modifiers.command))
+        && out.response.hovered()
+        && let Some(pp) = ui.input(|i| i.pointer.hover_pos())
+    {
+        let cc = out.galley.cursor_from_pos(pp - out.galley_pos).index.0;
+        let at = text.char_indices().nth(cc).map_or(text.len(), |(b, _)| b);
+        if link_at(text, at).or_else(|| link_at(text, at.saturating_sub(1))).is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+    }
     if out.response.clicked()
-        && ui.input(|i| i.modifiers.command)
+        && (reading || ui.input(|i| i.modifiers.command))
         && let Some(pp) = ui.input(|i| i.pointer.interact_pos())
     {
         let cc = out.galley.cursor_from_pos(pp - out.galley_pos).index.0;
